@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Qute Store
+Comment=Flatpak store for KDE Plasma
+Exec=qutestore
+Icon=com.zachvlat.qutestore
+Type=Application
+Categories=System;PackageManager;

@@ -1,0 +1,48 @@
+# --- Flatpak build output -------------------------------------------------
+# flatpak-builder working directories: repo/, build/, state/ and ccache/.
+# Everything needed to produce the bundle lives in here.
+/.flatpak-builder/
+
+# The bundle itself (e.g. com.zachvlat.qutestore.flatpak).
+/*.flatpak
+/*.flatpakrepo
+
+# --- Local (host) CMake build --------------------------------------------
+# Only the canonical build/ dir is ignored; build-aux/ is source.
+/build/
+
+# CMake/Ninja leftovers, in case a build is configured elsewhere.
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+cmake_install.cmake
+build.ninja
+.ninja_deps
+.ninja_log
+compile_commands.json
+*.ninja
+
+# Qt/Kirigami generated code and caches
+*_autogen/
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+.qmlls.ini
+.qmlformat.ini
+.qmlcache/
+
+# --- Editors / OS ---------------------------------------------------------
+*~
+*.swp
+*.swo
+.idea/
+.vscode/
+.directory
+*.kate-swp
+*.kdev4
+
+# --- Misc -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+core
+*.core
