@@ -60,6 +60,16 @@ Kirigami.ApplicationWindow {
             pageStack.replace(page)
     }
 
+    // Ctrl+F opens the search screen and focuses its field.
+    Shortcut {
+        sequence: StandardKey.Find
+        onActivated: {
+            window.navigateTo(searchPage)
+            if (pageStack.currentItem && pageStack.currentItem.focusSearch)
+                pageStack.currentItem.focusSearch()
+        }
+    }
+
     Component {
         id: appDetailComponent
         AppDetailPage {}
@@ -153,6 +163,16 @@ Kirigami.ApplicationWindow {
                 iconName: "system-software-update"
                 onClicked: window.navigateTo(updatesPage)
             },
+            SidebarRow {
+                text: qsTr("Repositories")
+                iconName: "server-database"
+                onClicked: window.navigateTo(repositoriesPage)
+            },
+            SidebarRow {
+                text: qsTr("Leftover files")
+                iconName: "trash-empty"
+                onClicked: window.navigateTo(leftoverPage)
+            },
             Rectangle {
                 Layout.fillWidth: true
                 Layout.topMargin: Kirigami.Units.smallSpacing
@@ -183,68 +203,9 @@ Kirigami.ApplicationWindow {
     }
 
     Component {
-        id: appListDelegate
-        Kirigami.AbstractCard {
-            property string actionMode: ListView.view ? ListView.view.actionMode : ""
-
-            TapHandler {
-                cursorShape: Qt.PointingHandCursor
-                onTapped: window.openDetails(model.appId)
-            }
-
-            contentItem: Column {
-                spacing: Kirigami.Units.smallSpacing
-                Label {
-                    text: model.name ? model.name : model.appId
-                    font.bold: true
-                }
-                Label {
-                    text: model.summary
-                    opacity: 0.7
-                    visible: text.length > 0
-                }
-                Label {
-                    text: model.appId
-                    opacity: 0.5
-                    font.pointSize: Kirigami.Theme.smallFont.pointSize
-                }
-                Row {
-                    spacing: Kirigami.Units.smallSpacing
-                    Button {
-                        text: qsTr("Details")
-                        onClicked: window.openDetails(model.appId)
-                    }
-                    Button {
-                        visible: actionMode === "search"
-                        text: qsTr("Install")
-                        enabled: !window.tx || !window.tx.running
-                        onClicked: backend.installApp(model.appId)
-                    }
-                    Button {
-                        visible: actionMode === "installed"
-                        text: qsTr("Launch")
-                        onClicked: backend.launchApp(model.appId)
-                    }
-                    Button {
-                        visible: actionMode === "installed" || actionMode === "updates"
-                        text: qsTr("Remove")
-                        enabled: !window.tx || !window.tx.running
-                        onClicked: backend.removeApp(model.appId)
-                    }
-                    Button {
-                        visible: actionMode === "updates"
-                        text: qsTr("Update")
-                        enabled: !window.tx || !window.tx.running
-                        onClicked: backend.updateApp(model.appId)
-                    }
-                }
-            }
-        }
-    }
-
-    Component {
         id: exploreTile
         Kirigami.AbstractCard {
+            id: tile
             width: Kirigami.Units.gridUnit * 12
             height: Kirigami.Units.gridUnit * 13
 
@@ -256,15 +217,31 @@ Kirigami.ApplicationWindow {
             contentItem: Column {
                 spacing: Kirigami.Units.smallSpacing
 
-                Image {
-                    readonly property real size: Kirigami.Units.iconSizes.huge
-                    visible: model.icon && model.icon.length > 0
-                    source: model.icon ? model.icon : ""
-                    sourceSize.width: size
-                    sourceSize.height: size
-                    width: size
-                    height: size
-                    fillMode: Image.PreserveAspectFit
+                Item {
+                    readonly property real iconSize: Kirigami.Units.iconSizes.huge
+                    width: tile.width
+                    height: iconSize
+
+                    // Installed apps have no AppStream icon, so fall back to a
+                    // themed placeholder rather than leaving the tile blank.
+                    Kirigami.Icon {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: !model.icon || model.icon.length === 0
+                        source: "application-x-executable"
+                        width: parent.iconSize
+                        height: parent.iconSize
+                        opacity: 0.4
+                    }
+                    Image {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: model.icon && model.icon.length > 0
+                        source: model.icon ? model.icon : ""
+                        sourceSize.width: parent.iconSize
+                        sourceSize.height: parent.iconSize
+                        width: parent.iconSize
+                        height: parent.iconSize
+                        fillMode: Image.PreserveAspectFit
+                    }
                 }
                 Label {
                     width: parent.width
@@ -312,6 +289,31 @@ Kirigami.ApplicationWindow {
                     }
                 }
 
+                // The Flathub-curated rows (Trending, Most Popular, New, Updated)
+                // appear first, in that order. The category rows follow.
+                Repeater {
+                    model: backend.exploreCurated
+                    delegate: Column {
+                        width: exploreRoot.width
+                        spacing: Kirigami.Units.smallSpacing
+
+                        Kirigami.Heading {
+                            text: modelData.title
+                            level: 2
+                        }
+
+                        ListView {
+                            width: parent.width
+                            height: Kirigami.Units.gridUnit * 13 + Kirigami.Units.largeSpacing
+                            orientation: ListView.Horizontal
+                            clip: true
+                            spacing: Kirigami.Units.smallSpacing
+                            model: modelData.model
+                            delegate: exploreTile
+                        }
+                    }
+                }
+
                 Repeater {
                     model: backend.exploreSections
                     delegate: Column {
@@ -340,7 +342,13 @@ Kirigami.ApplicationWindow {
     Component {
         id: searchPage
         Kirigami.Page {
+            id: searchRoot
             title: qsTr("Search")
+
+            function focusSearch() {
+                queryField.forceActiveFocus()
+            }
+
             Column {
                 anchors.fill: parent
                 spacing: Kirigami.Units.smallSpacing
@@ -364,14 +372,20 @@ Kirigami.ApplicationWindow {
                     running: backend.searching
                     visible: backend.searching
                 }
-                ListView {
+                GridView {
                     width: parent.width
                     height: parent.height - queryField.height - Kirigami.Units.smallSpacing
                     clip: true
+                    cellWidth: Kirigami.Units.gridUnit * 13
+                    cellHeight: Kirigami.Units.gridUnit * 14
                     model: backend.searchResults
-                    property string actionMode: "search"
-                    spacing: Kirigami.Units.smallSpacing
-                    delegate: appListDelegate
+                    delegate: exploreTile
+                }
+                Label {
+                    width: parent.width
+                    visible: !backend.searching && backend.searchResults.count === 0
+                    text: qsTr("Search for applications to install.")
+                    opacity: 0.7
                 }
             }
         }
@@ -382,13 +396,19 @@ Kirigami.ApplicationWindow {
         Kirigami.Page {
             title: qsTr("Installed")
             Component.onCompleted: backend.refreshInstalled()
-            ListView {
+            GridView {
                 anchors.fill: parent
                 clip: true
+                cellWidth: Kirigami.Units.gridUnit * 13
+                cellHeight: Kirigami.Units.gridUnit * 14
                 model: backend.installedApps
-                property string actionMode: "installed"
-                spacing: Kirigami.Units.smallSpacing
-                delegate: appListDelegate
+                delegate: exploreTile
+            }
+            Label {
+                anchors.centerIn: parent
+                visible: backend.installedApps.count === 0
+                text: qsTr("Nothing installed yet.")
+                opacity: 0.7
             }
         }
     }
@@ -398,13 +418,20 @@ Kirigami.ApplicationWindow {
         Kirigami.Page {
             title: qsTr("Updates")
             Component.onCompleted: backend.refreshInstalled()
-            ListView {
+            GridView {
                 anchors.fill: parent
                 clip: true
+                cellWidth: Kirigami.Units.gridUnit * 13
+                cellHeight: Kirigami.Units.gridUnit * 14
                 model: backend.updates
-                property string actionMode: "updates"
-                spacing: Kirigami.Units.smallSpacing
-                delegate: appListDelegate
+                delegate: exploreTile
+            }
+            Label {
+                anchors.centerIn: parent
+                visible: backend.updates.count === 0
+                text: qsTr("All quiet here…")
+                opacity: 0.7
+                font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.3
             }
         }
     }
@@ -464,6 +491,20 @@ Kirigami.ApplicationWindow {
                     onClicked: backend.dismissTransaction()
                 }
             }
+        }
+    }
+
+    Component {
+        id: repositoriesPage
+        Loader {
+            source: "qrc:/qt/qml/com/zachvlat/qutestore/qml/RepositoriesPage.qml"
+        }
+    }
+
+    Component {
+        id: leftoverPage
+        Loader {
+            source: "qrc:/qt/qml/com/zachvlat/qutestore/qml/LeftoverPage.qml"
         }
     }
 

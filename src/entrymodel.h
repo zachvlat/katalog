@@ -20,6 +20,15 @@ struct ExploreSectionData {
     QList<EntryData> entries;
 };
 
+// Everything the Explore page needs from a single (AppStream) worker pass. The
+// curated Flathub API rows are fetched separately over the network; the two
+// "recent" lists are the offline fallback derived from AppStream release dates.
+struct ExploreResult {
+    QList<ExploreSectionData> categories;
+    QList<EntryData> newest;
+    QList<EntryData> updated;
+};
+
 class EntryModel : public QAbstractListModel {
     Q_OBJECT
 public:

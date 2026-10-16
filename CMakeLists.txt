@@ -6,9 +6,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Concurrent)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Concurrent Network)
 find_package(KF6Kirigami2 6.0 QUIET)
 find_package(KF6I18n 6.0 QUIET)
+find_package(KF6Notifications 6.0 QUIET)
+
+if (NOT KF6Notifications_FOUND)
+    find_package(KF6Notifications5 QUIET)
+endif()
 
 qt_add_executable(qutestore
     src/main.cpp
@@ -17,6 +22,9 @@ qt_add_executable(qutestore
     src/backend.cpp
     src/details.cpp
     src/transaction.cpp
+    src/flathubclient.cpp
+    src/remotemodel.cpp
+    src/leftovermodel.cpp
 )
 
 # Optional Flatpak/AppStream support. On the host these come from the system;
@@ -85,6 +93,13 @@ if(GLIB_INCLUDE_DIR AND GLIB_LIBRARY)
     endif()
     target_link_libraries(qutestore PRIVATE ${GLIB_LIBRARY})
 endif()
+if(KF6I18N_FOUND)
+    target_link_libraries(qutestore PRIVATE KF6::I18n)
+endif()
+if(KF6Notifications_FOUND OR KF6NOTIFICATIONS_FOUND OR KF6Notifications5_FOUND)
+    target_link_libraries(qutestore PRIVATE KF6::Notifications)
+    target_compile_definitions(qutestore PRIVATE HAVE_KNOTIFICATIONS)
+endif()
 if(GOBJECT_LIBRARY)
     target_link_libraries(qutestore PRIVATE ${GOBJECT_LIBRARY})
 endif()
@@ -95,9 +110,15 @@ endif()
 qt_add_qml_module(qutestore
     URI com.zachvlat.qutestore
     VERSION 1.0
+    SOURCES
+        src/flathubclient.cpp
+        src/remotemodel.cpp
+        src/leftovermodel.cpp
     QML_FILES
         qml/Main.qml
         qml/AppDetailPage.qml
+        qml/RepositoriesPage.qml
+        qml/LeftoverPage.qml
     NO_RESOURCE_TARGET_PATH
 )
 
@@ -110,6 +131,7 @@ target_link_libraries(qutestore PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
     Qt6::Concurrent
+    Qt6::Network
 )
 
 install(TARGETS qutestore RUNTIME DESTINATION bin)

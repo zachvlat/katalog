@@ -7,6 +7,7 @@ Kirigami.Page {
     id: page
 
     property var app: backend.details
+    property string selectedShot: ""
     readonly property bool busy: backend.currentTransaction !== null
                                   && backend.currentTransaction !== undefined
                                   && backend.currentTransaction.running
@@ -162,6 +163,11 @@ Kirigami.Page {
                             radius: Kirigami.Units.smallSpacing
                             color: Kirigami.Theme.alternateBackgroundColor
                             clip: true
+
+                            TapHandler {
+                                cursorShape: Qt.PointingHandCursor
+                                onTapped: page.selectedShot = modelData.url
+                            }
 
                             Image {
                                 anchors.fill: parent
@@ -360,6 +366,34 @@ Kirigami.Page {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Kirigami.Units.largeSpacing
             }
+        }
+    }
+
+    // Full-size view of a screenshot, opened by clicking one in the strip.
+    Popup {
+        id: shotViewer
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(page.width * 0.85, 1200)
+        height: page.height * 0.85
+        modal: true
+        padding: Kirigami.Units.smallSpacing
+        visible: page.selectedShot.length > 0
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        onClosed: page.selectedShot = ""
+
+        background: Rectangle {
+            color: Kirigami.Theme.backgroundColor
+            radius: Kirigami.Units.smallSpacing
+            border.width: 1
+            border.color: Kirigami.Theme.disabledTextColor
+        }
+
+        contentItem: Image {
+            source: page.selectedShot
+            fillMode: Image.PreserveAspectFit
+            asynchronous: true
+            cache: false
         }
     }
 }

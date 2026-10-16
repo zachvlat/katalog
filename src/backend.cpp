@@ -9,12 +9,25 @@
 #include "backend.h"
 #include "transaction.h"
 
+#ifdef HAVE_KNOTIFICATIONS
+#include <KNotification>
+#endif
+
 #include <QtConcurrent/QtConcurrentRun>
+#include <QDateTime>
 #include <QDebug>
+#include <QDir>
+#include <QDirIterator>
+#include <QFile>
 #include <QHash>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSet>
+#include <QStandardPaths>
+#include <QTimer>
 #include <QVariantMap>
+
+#include <algorithm>
 
 namespace {
 
@@ -311,9 +324,9 @@ AppDetailData appStreamDetails(FlatpakManager *manager, const QString &appId)
     return data;
 }
 
-QList<ExploreSectionData> appStreamExplore(FlatpakManager *manager)
+ExploreResult appStreamExplore(FlatpakManager *manager)
 {
-    QList<ExploreSectionData> sections;
+    ExploreResult result;
 
     AsPool *pool = as_pool_new();
     configureAppStreamPool(pool, manager);
@@ -323,7 +336,7 @@ QList<ExploreSectionData> appStreamExplore(FlatpakManager *manager)
         qWarning() << "AppStream: failed to load pool:" << (error ? error->message : "unknown error");
         g_clear_error(&error);
         g_object_unref(pool);
-        return sections;
+        return result;
     }
 
     // The curated rows shown on the Explore page. The category names are plain
@@ -379,11 +392,60 @@ QList<ExploreSectionData> appStreamExplore(FlatpakManager *manager)
         g_object_unref(box);
 
         if (!section.entries.isEmpty())
-            sections.append(section);
+            result.categories.append(section);
+    }
+
+    // Offline fallback for the "New"/"Recently updated" Explore rows: order
+    // every desktop app by its most recent release date. Only used when the
+    // Flathub API rows are unavailable.
+    if (AsComponentBox *all = as_pool_get_components(pool)) {
+        struct DatedEntry {
+            quint64 timestamp;
+            EntryData entry;
+        };
+        QList<DatedEntry> dated;
+
+        const guint count = as_component_box_len(all);
+        for (guint i = 0; i < count; ++i) {
+            AsComponent *component = as_component_box_index(all, i);
+            if (as_component_get_kind(component) != AS_COMPONENT_KIND_DESKTOP_APP)
+                continue;
+            if (!as_component_get_id(component))
+                continue;
+
+            quint64 newest = 0;
+            if (AsReleaseList *releases = as_component_get_releases_plain(component)) {
+                const guint releaseCount = as_release_list_get_size(releases);
+                for (guint r = 0; r < releaseCount; ++r) {
+                    AsRelease *release = as_release_list_index_safe(releases, r);
+                    if (release)
+                        newest = qMax(newest, as_release_get_timestamp(release));
+                }
+            }
+            if (newest == 0)
+                continue;
+            dated.append({newest, entryFromComponent(component)});
+        }
+
+        std::sort(dated.begin(), dated.end(), [](const DatedEntry &a, const DatedEntry &b) {
+            return a.timestamp > b.timestamp;
+        });
+
+        constexpr int kRecentLimit = 24;
+        const quint64 recentCutoff =
+            static_cast<quint64>(QDateTime::currentSecsSinceEpoch()) - (quint64(120) * 24 * 60 * 60);
+        for (int i = 0; i < dated.size(); ++i) {
+            if (i < kRecentLimit)
+                result.updated.append(dated.at(i).entry);
+            if (dated.at(i).timestamp >= recentCutoff && result.newest.size() < kRecentLimit)
+                result.newest.append(dated.at(i).entry);
+        }
+
+        g_object_unref(all);
     }
 
     g_object_unref(pool);
-    return sections;
+    return result;
 }
 
 QList<EntryData> appStreamCategory(FlatpakManager *manager, const QString &category)
@@ -679,6 +741,149 @@ void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailD
 
 namespace {
 
+// Mirrors what `flatpak uninstall --delete-data` removes: the per-app XDG base
+// directory Flatpak creates for every app, plus the app's own persistent "data"
+// directory inside each installation. Best-effort, since the system-wide data
+// directory is owned by root and may not be removable from inside the sandbox.
+void removeAppData(const QString &appId)
+{
+    const QString home = QDir::homePath();
+    QDir(home + QStringLiteral("/.var/app/") + appId).removeRecursively();
+
+    const QString dataHome = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (!dataHome.isEmpty())
+        QDir(dataHome + QStringLiteral("/flatpak/app/") + appId + QStringLiteral("/data")).removeRecursively();
+    QDir(QStringLiteral("/var/lib/flatpak/app/") + appId + QStringLiteral("/data")).removeRecursively();
+}
+
+// Runs the AppStream pass for the Explore page. Kept as a free function so it is
+// only compiled when AppStream is available.
+ExploreResult loadExploreData(FlatpakManager *manager)
+{
+#ifdef HAVE_APPSTREAM
+    return appStreamExplore(manager);
+#else
+    Q_UNUSED(manager)
+    return ExploreResult();
+#endif
+}
+
+// The set of application ids currently installed in either installation.
+QSet<QString> installedAppIds(FlatpakManager *manager)
+{
+    QSet<QString> ids;
+#ifdef HAVE_FLATPAK
+    QList<FlatpakInstallation *> installations;
+    if (auto *system = manager->systemInstallation())
+        installations << system;
+    if (auto *user = manager->userInstallation())
+        installations << user;
+
+    for (FlatpakInstallation *installation : installations) {
+        g_autoptr(GPtrArray) refs = flatpak_installation_list_installed_refs(installation, nullptr, nullptr);
+        if (!refs)
+            continue;
+        for (guint i = 0; i < refs->len; ++i) {
+            auto *ref = FLATPAK_REF(g_ptr_array_index(refs, i));
+            if (flatpak_ref_get_kind(ref) != FLATPAK_REF_KIND_APP)
+                continue;
+            ids.insert(QString::fromUtf8(flatpak_ref_get_name(ref)));
+        }
+    }
+#else
+    Q_UNUSED(manager)
+#endif
+    return ids;
+}
+
+bool looksLikeAppId(const QString &name)
+{
+    static const QRegularExpression re(QStringLiteral("^[A-Za-z0-9_]+(\\.[A-Za-z0-9_]+)+$"));
+    return re.match(name).hasMatch();
+}
+
+// Extension refs (locales, debug info, …) live in the same directories but
+// belong to an installed app, so they are not leftovers.
+bool isExtensionRef(const QString &name)
+{
+    static const QStringList suffixes = {
+        QStringLiteral(".Locale"), QStringLiteral(".Debug"),   QStringLiteral(".Sources"),
+        QStringLiteral(".Docs"),   QStringLiteral(".BaseApp"), QStringLiteral(".Var"),
+        QStringLiteral(".Devel"),
+    };
+    for (const QString &suffix : suffixes) {
+        if (name.endsWith(suffix))
+            return true;
+    }
+    return false;
+}
+
+quint64 directorySize(const QString &path)
+{
+    quint64 total = 0;
+    QDirIterator it(path, QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        total += static_cast<quint64>(it.fileInfo().size());
+    }
+    return total;
+}
+
+// Finds data directories that belong to applications which are no longer
+// installed (the "leftover files" shown on the cleanup page).
+QList<LeftoverData> scanLeftovers(FlatpakManager *manager)
+{
+    const QSet<QString> installed = installedAppIds(manager);
+
+    struct Candidate {
+        QString dir;
+        bool isUser;
+    };
+    QList<Candidate> candidates;
+    candidates.append({QDir::homePath() + QStringLiteral("/.var/app"), true});
+    const QString dataHome = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (!dataHome.isEmpty())
+        candidates.append({dataHome + QStringLiteral("/flatpak/app"), true});
+    candidates.append({QStringLiteral("/var/lib/flatpak/app"), false});
+
+    QList<LeftoverData> leftovers;
+    QSet<QString> seenPaths;
+
+    for (const Candidate &candidate : candidates) {
+        QDir dir(candidate.dir);
+        if (!dir.exists())
+            continue;
+
+        const QStringList entries = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString &name : entries) {
+            if (isExtensionRef(name) || !looksLikeAppId(name))
+                continue;
+            if (installed.contains(name))
+                continue;
+
+            const QString path = dir.absoluteFilePath(name);
+            if (seenPaths.contains(path))
+                continue;
+            seenPaths.insert(path);
+
+            LeftoverData data;
+            data.appId = name;
+            data.path = path;
+            data.isUser = candidate.isUser;
+            data.size = directorySize(path);
+            data.sizeText = humanSize(data.size);
+            if (data.sizeText.isEmpty())
+                data.sizeText = QStringLiteral("0 B");
+            leftovers.append(data);
+        }
+    }
+
+    std::sort(leftovers.begin(), leftovers.end(), [](const LeftoverData &a, const LeftoverData &b) {
+        return a.size > b.size;
+    });
+    return leftovers;
+}
+
 AppDetailData loadDetails(FlatpakManager *manager, const QString &appId, quint64 generation)
 {
     AppDetailData data;
@@ -707,6 +912,9 @@ Backend::Backend(QObject *parent)
     m_updates = new EntryModel(this);
     m_category = new EntryModel(this);
     m_details = new Details(this);
+    m_remotes = new RemoteModel(this);
+    m_leftovers = new LeftoverModel(this);
+    m_flathub = new FlathubClient(this);
 
     m_watcher = new QFutureWatcher<QList<EntryData>>(this);
     connect(m_watcher, &QFutureWatcher<QList<EntryData>>::finished, this, [this]() {
@@ -728,32 +936,19 @@ Backend::Backend(QObject *parent)
         m_details->apply(data);
     });
 
-    m_exploreWatcher = new QFutureWatcher<QList<ExploreSectionData>>(this);
-    connect(m_exploreWatcher, &QFutureWatcher<QList<ExploreSectionData>>::finished, this, [this]() {
-        const QList<ExploreSectionData> sections = m_exploreWatcher->result();
-
-        for (EntryModel *model : m_exploreModels)
-            model->deleteLater();
-        m_exploreModels.clear();
-        m_exploreSections.clear();
-
-        for (const ExploreSectionData &section : sections) {
-            auto *model = new EntryModel(this);
-            for (const EntryData &entry : section.entries)
-                model->append(entry);
-            m_exploreModels.append(model);
-
-            QVariantMap row;
-            row.insert(QStringLiteral("title"), section.title);
-            row.insert(QStringLiteral("category"), section.category);
-            row.insert(QStringLiteral("icon"), section.icon);
-            row.insert(QStringLiteral("model"), QVariant::fromValue(static_cast<QObject *>(model)));
-            m_exploreSections.append(row);
-        }
-
-        m_exploring = false;
-        Q_EMIT exploreChanged();
+    // The Explore page is assembled from two asynchronous sources: the local
+    // AppStream pool (categories + offline fallback) and the Flathub API
+    // (curated rows). explorePartDone() rebuilds the page once both are in.
+    m_exploreWatcher = new QFutureWatcher<ExploreResult>(this);
+    connect(m_exploreWatcher, &QFutureWatcher<ExploreResult>::finished, this, [this]() {
+        const ExploreResult result = m_exploreWatcher->result();
+        m_exploreCategories = result.categories;
+        m_recentNew = result.newest;
+        m_recentUpdated = result.updated;
+        explorePartDone();
     });
+
+    connect(m_flathub, &FlathubClient::allFinished, this, [this]() { explorePartDone(); });
 
     m_categoryWatcher = new QFutureWatcher<QList<EntryData>>(this);
     connect(m_categoryWatcher, &QFutureWatcher<QList<EntryData>>::finished, this, [this]() {
@@ -766,6 +961,21 @@ Backend::Backend(QObject *parent)
         m_categoryLoading = false;
         Q_EMIT categoryChanged();
     });
+
+    m_leftoverWatcher = new QFutureWatcher<QList<LeftoverData>>(this);
+    connect(m_leftoverWatcher, &QFutureWatcher<QList<LeftoverData>>::finished, this, [this]() {
+        m_leftovers->setLeftovers(m_leftoverWatcher->result());
+        m_scanningLeftovers = false;
+        Q_EMIT leftoversChanged();
+    });
+
+    // Background update checks: hourly while the app is running, plus one check
+    // shortly after launch so the user gets told about pending updates.
+    m_updateTimer = new QTimer(this);
+    m_updateTimer->setInterval(60 * 60 * 1000);
+    connect(m_updateTimer, &QTimer::timeout, this, &Backend::checkForUpdates);
+    m_updateTimer->start();
+    QTimer::singleShot(60 * 1000, this, &Backend::checkForUpdates);
 }
 
 #ifdef HAVE_FLATPAK
@@ -898,16 +1108,95 @@ void Backend::loadExplore()
     if (m_exploring)
         return;
 
-#ifdef HAVE_APPSTREAM
     m_exploring = true;
-    Q_EMIT exploreChanged();
-    m_exploreWatcher->setFuture(QtConcurrent::run([this]() { return appStreamExplore(m_flatpak); }));
-#else
-    // Without AppStream there is nothing to populate the Explore rows with.
+    m_exploreCurated.clear();
     m_exploreSections.clear();
+    m_exploreCategories.clear();
+    m_recentNew.clear();
+    m_recentUpdated.clear();
+    for (EntryModel *model : m_exploreModels)
+        model->deleteLater();
+    m_exploreModels.clear();
+    Q_EMIT exploreChanged();
+
+    // Two asynchronous sources: the AppStream worker and the Flathub API.
+    m_explorePending = 2;
+    m_exploreWatcher->setFuture(QtConcurrent::run([this]() { return loadExploreData(m_flatpak); }));
+    m_flathub->fetchExplore();
+}
+
+void Backend::explorePartDone()
+{
+    if (m_explorePending > 0)
+        --m_explorePending;
+    if (m_explorePending > 0)
+        return;
+    buildExplore();
+}
+
+void Backend::buildExplore()
+{
+    for (EntryModel *model : m_exploreModels)
+        model->deleteLater();
+    m_exploreModels.clear();
+    m_exploreCurated.clear();
+    m_exploreSections.clear();
+
+    // Curated rows, in the requested order. Each falls back to the AppStream
+    // release-date list when the Flathub API row is unavailable (offline).
+    struct RowDef {
+        const char *key;
+        QString title;
+        QString icon;
+    };
+    const RowDef rows[] = {
+        {FlathubClient::TrendingKey, tr("Trending"), QStringLiteral("office-chart-line")},
+        {FlathubClient::PopularKey, tr("Most Popular"), QStringLiteral("starred")},
+        {FlathubClient::NewKey, tr("New"), QStringLiteral("list-add")},
+        {FlathubClient::UpdatedKey, tr("Recently Updated"), QStringLiteral("system-software-update")},
+    };
+
+    for (const RowDef &row : rows) {
+        const QString key = QString::fromLatin1(row.key);
+        QList<EntryData> entries = m_flathub->collection(key);
+        if (entries.isEmpty()) {
+            if (key == QLatin1String(FlathubClient::NewKey))
+                entries = m_recentNew;
+            else if (key == QLatin1String(FlathubClient::UpdatedKey))
+                entries = m_recentUpdated;
+        }
+        if (entries.isEmpty())
+            continue;
+
+        auto *model = new EntryModel(this);
+        for (const EntryData &entry : entries)
+            model->append(entry);
+        m_exploreModels.append(model);
+
+        QVariantMap map;
+        map.insert(QStringLiteral("title"), row.title);
+        map.insert(QStringLiteral("icon"), row.icon);
+        map.insert(QStringLiteral("category"), QString());
+        map.insert(QStringLiteral("model"), QVariant::fromValue(static_cast<QObject *>(model)));
+        m_exploreCurated.append(map);
+    }
+
+    for (const ExploreSectionData &section : m_exploreCategories) {
+        auto *model = new EntryModel(this);
+        for (const EntryData &entry : section.entries)
+            model->append(entry);
+        m_exploreModels.append(model);
+
+        QVariantMap map;
+        map.insert(QStringLiteral("title"), section.title);
+        map.insert(QStringLiteral("icon"), section.icon);
+        map.insert(QStringLiteral("category"), section.category);
+        map.insert(QStringLiteral("model"), QVariant::fromValue(static_cast<QObject *>(model)));
+        m_exploreSections.append(map);
+    }
+
     m_exploring = false;
     Q_EMIT exploreChanged();
-#endif
 }
 
 void Backend::loadCategory(const QString &category)
@@ -954,7 +1243,18 @@ void Backend::removeApp(const QString &appId)
 
 void Backend::launchApp(const QString &appId)
 {
-    if (QProcess::startDetached(QStringLiteral("flatpak"), {QStringLiteral("run"), appId}))
+    const QStringList args{QStringLiteral("run"), appId};
+
+    // Inside a Flatpak sandbox there is no nested Flatpak session: starting a
+    // second sandbox from within one has to go through the host's Flatpak via
+    // the org.freedesktop.Flatpak portal ("flatpak-spawn --host"). The bundled
+    // flatpak would otherwise try (and fail) to run the app in the sandbox.
+    if (QFile::exists(QStringLiteral("/.flatpak-info"))
+        && QProcess::startDetached(QStringLiteral("flatpak-spawn"),
+                                   QStringList{QStringLiteral("--host"), QStringLiteral("flatpak")} + args))
+        return;
+
+    if (QProcess::startDetached(QStringLiteral("flatpak"), args))
         return;
     qWarning() << "Failed to launch" << appId;
 }
@@ -983,7 +1283,10 @@ void Backend::startTransaction(int kind, const QString &appId)
     Q_EMIT currentTransactionChanged();
 
     connect(transaction, &Transaction::completed, this, &Backend::refreshInstalled);
-    connect(transaction, &Transaction::completed, this, [this, appId]() {
+    connect(transaction, &Transaction::completed, this, [this, appId, transaction]() {
+        // A removal should also drop the app's leftover data.
+        if (transaction->operation() == QStringLiteral("remove"))
+            removeAppData(appId);
         // Keep an open detail page in sync after install/update/remove.
         if (m_details && m_details->appId() == appId)
             openApp(appId);
@@ -994,4 +1297,178 @@ void Backend::startTransaction(int kind, const QString &appId)
     });
 
     transaction->start();
+}
+
+void Backend::refreshRemotes()
+{
+    QList<RemoteData> remotes;
+#ifdef HAVE_FLATPAK
+    const struct {
+        FlatpakInstallation *installation;
+        bool isUser;
+    } installations[] = {
+        {m_flatpak->systemInstallation(), false},
+        {m_flatpak->userInstallation(), true},
+    };
+
+    for (const auto &entry : installations) {
+        if (!entry.installation)
+            continue;
+
+        g_autoptr(GPtrArray) list = flatpak_installation_list_remotes(entry.installation, nullptr, nullptr);
+        if (!list)
+            continue;
+
+        for (guint i = 0; i < list->len; ++i) {
+            auto *remote = FLATPAK_REMOTE(g_ptr_array_index(list, i));
+
+            RemoteData data;
+            data.name = QString::fromUtf8(flatpak_remote_get_name(remote));
+            if (g_autofree char *title = flatpak_remote_get_title(remote))
+                data.title = QString::fromUtf8(title);
+            if (g_autofree char *url = flatpak_remote_get_url(remote))
+                data.url = QString::fromUtf8(url);
+            data.disabled = flatpak_remote_get_disabled(remote);
+            data.isUser = entry.isUser;
+            remotes.append(data);
+        }
+    }
+#endif
+    m_remotes->setRemotes(remotes);
+}
+
+void Backend::addRemote(const QString &name, const QString &url, bool user)
+{
+#ifdef HAVE_FLATPAK
+    FlatpakInstallation *installation = user ? m_flatpak->userInstallation() : m_flatpak->systemInstallation();
+    if (!installation) {
+        qWarning() << "No" << (user ? "user" : "system") << "installation available to add a remote";
+        return;
+    }
+
+    g_autoptr(FlatpakRemote) remote = flatpak_remote_new(name.toUtf8().constData());
+    flatpak_remote_set_url(remote, url.toUtf8().constData());
+
+    GError *error = nullptr;
+    if (!flatpak_installation_add_remote(installation, remote, TRUE, nullptr, &error)) {
+        qWarning() << "Could not add remote" << name << ":" << (error ? error->message : "unknown error");
+        g_clear_error(&error);
+        return;
+    }
+
+    refreshRemotes();
+
+    // Pull the new remote's AppStream metadata so its apps appear in Explore and
+    // search. Runs off the main thread because it may hit the network.
+    QtConcurrent::run([installation, name]() {
+        GError *error = nullptr;
+        gboolean out_changed = FALSE;
+        flatpak_installation_update_appstream_sync(installation, name.toUtf8().constData(), nullptr, &out_changed, nullptr, &error);
+        if (error) {
+            qWarning() << "Could not update AppStream for" << name << ":" << error->message;
+            g_clear_error(&error);
+        }
+    });
+#else
+    Q_UNUSED(name)
+    Q_UNUSED(url)
+    Q_UNUSED(user)
+#endif
+}
+
+void Backend::removeRemote(const QString &name, bool user)
+{
+#ifdef HAVE_FLATPAK
+    FlatpakInstallation *installation = user ? m_flatpak->userInstallation() : m_flatpak->systemInstallation();
+    if (!installation)
+        return;
+
+    GError *error = nullptr;
+    if (!flatpak_installation_remove_remote(installation, name.toUtf8().constData(), nullptr, &error)) {
+        qWarning() << "Could not remove remote" << name << ":" << (error ? error->message : "unknown error");
+        g_clear_error(&error);
+        return;
+    }
+    refreshRemotes();
+#else
+    Q_UNUSED(name)
+    Q_UNUSED(user)
+#endif
+}
+
+void Backend::setRemoteEnabled(const QString &name, bool user, bool enabled)
+{
+#ifdef HAVE_FLATPAK
+    FlatpakInstallation *installation = user ? m_flatpak->userInstallation() : m_flatpak->systemInstallation();
+    if (!installation)
+        return;
+
+    GError *error = nullptr;
+    g_autoptr(FlatpakRemote) remote =
+        flatpak_installation_get_remote_by_name(installation, name.toUtf8().constData(), nullptr, &error);
+    if (!remote) {
+        qWarning() << "Could not load remote" << name << ":" << (error ? error->message : "unknown error");
+        g_clear_error(&error);
+        return;
+    }
+
+    flatpak_remote_set_disabled(remote, !enabled);
+    if (!flatpak_installation_modify_remote(installation, remote, nullptr, &error)) {
+        qWarning() << "Could not modify remote" << name << ":" << (error ? error->message : "unknown error");
+        g_clear_error(&error);
+        return;
+    }
+    refreshRemotes();
+#else
+    Q_UNUSED(name)
+    Q_UNUSED(user)
+    Q_UNUSED(enabled)
+#endif
+}
+
+void Backend::refreshLeftovers()
+{
+    if (m_scanningLeftovers)
+        return;
+
+    m_scanningLeftovers = true;
+    Q_EMIT leftoversChanged();
+    m_leftoverWatcher->setFuture(QtConcurrent::run([this]() { return scanLeftovers(m_flatpak); }));
+}
+
+void Backend::removeLeftover(const QString &path)
+{
+    if (path.isEmpty())
+        return;
+    QDir(path).removeRecursively();
+    refreshLeftovers();
+}
+
+void Backend::checkForUpdates()
+{
+    if (m_transaction && m_transaction->running())
+        return; // Don't disturb an in-flight transaction.
+
+    refreshInstalled();
+
+    const int count = m_updates->rowCount();
+    if (count > 0 && count != m_lastNotifiedUpdates) {
+        m_lastNotifiedUpdates = count;
+        notifyUpdates(count);
+    } else if (count == 0) {
+        m_lastNotifiedUpdates = 0;
+    }
+}
+
+void Backend::notifyUpdates(int count)
+{
+#ifdef HAVE_KNOTIFICATIONS
+    KNotification::event(KNotification::Notification,
+                         tr("Updates available"),
+                         tr("%n application(s) can be updated.", "", count),
+                         QStringLiteral("com.zachvlat.qutestore"),
+                         KNotification::CloseOnTimeout);
+#else
+    Q_UNUSED(count)
+#endif
 }
