@@ -20,11 +20,17 @@ struct ResolvedOperation {
 
 FlatpakRef *findAppRef(GPtrArray *refs, const QString &appId)
 {
+    // The requested id may come from AppStream with a `.desktop` suffix that
+    // Flatpak refs never have; normalise before comparing.
+    constexpr qsizetype desktopSuffixLength = 8; // strlen(".desktop")
+    const QString wanted =
+        appId.endsWith(QLatin1String(".desktop")) ? appId.chopped(desktopSuffixLength) : appId;
+
     for (guint i = 0; i < refs->len; ++i) {
         auto *ref = FLATPAK_REF(g_ptr_array_index(refs, i));
         if (flatpak_ref_get_kind(ref) != FLATPAK_REF_KIND_APP)
             continue;
-        if (appId == QString::fromUtf8(flatpak_ref_get_name(ref)))
+        if (wanted == QString::fromUtf8(flatpak_ref_get_name(ref)))
             return ref;
     }
     return nullptr;

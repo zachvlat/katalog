@@ -45,7 +45,8 @@ Kirigami.ScrollablePage {
                             spacing: Kirigami.Units.smallSpacing / 2
 
                             Label {
-                                text: model.title && model.title.length > 0 ? model.title : model.name
+                                text: (model.title && model.title.length > 0 ? model.title : model.name)
+                                      + " (" + (model.isUser ? qsTr("User") : qsTr("System")) + ")"
                                 font.bold: true
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight

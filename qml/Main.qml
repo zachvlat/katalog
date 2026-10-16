@@ -10,6 +10,11 @@ Kirigami.ApplicationWindow {
     height: 800
     title: qsTr("Qute Store")
 
+    // Padding around the contents of every app tile, and the resulting tile
+    // height: one icon tall plus the padding, so the row layout stays compact.
+    readonly property real tilePadding: Kirigami.Units.largeSpacing * 2
+    readonly property real tileHeight: Kirigami.Units.iconSizes.huge + tilePadding * 2
+
     readonly property var tx: backend.currentTransaction
 
     Component.onCompleted: {
@@ -93,7 +98,7 @@ Kirigami.ApplicationWindow {
                 visible: !backend.categoryLoading
                 clip: true
                 cellWidth: Kirigami.Units.gridUnit * 13
-                cellHeight: Kirigami.Units.gridUnit * 14
+                cellHeight: window.tileHeight + Kirigami.Units.gridUnit
                 model: backend.categoryApps
                 delegate: exploreTile
             }
@@ -207,57 +212,71 @@ Kirigami.ApplicationWindow {
         Kirigami.AbstractCard {
             id: tile
             width: Kirigami.Units.gridUnit * 12
-            height: Kirigami.Units.gridUnit * 13
+            height: window.tileHeight
+            padding: window.tilePadding
 
             TapHandler {
                 cursorShape: Qt.PointingHandCursor
                 onTapped: window.openDetails(model.appId)
             }
 
-            contentItem: Column {
-                spacing: Kirigami.Units.smallSpacing
+            contentItem: RowLayout {
+                spacing: Kirigami.Units.largeSpacing
 
                 Item {
+                    id: iconBox
                     readonly property real iconSize: Kirigami.Units.iconSizes.huge
-                    width: tile.width
-                    height: iconSize
+                    // AppStream may return either an icon URL or a themed name.
+                    readonly property string iconSource: model.icon ? model.icon : ""
+                    readonly property bool iconIsUrl: iconSource.indexOf("://") !== -1
+                    Layout.preferredWidth: iconSize
+                    Layout.preferredHeight: iconSize
+                    Layout.alignment: Qt.AlignVCenter
 
-                    // Installed apps have no AppStream icon, so fall back to a
-                    // themed placeholder rather than leaving the tile blank.
-                    Kirigami.Icon {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        visible: !model.icon || model.icon.length === 0
-                        source: "application-x-executable"
-                        width: parent.iconSize
-                        height: parent.iconSize
-                        opacity: 0.4
-                    }
                     Image {
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        visible: model.icon && model.icon.length > 0
-                        source: model.icon ? model.icon : ""
+                        id: tileImage
+                        anchors.centerIn: parent
+                        source: parent.iconIsUrl ? parent.iconSource : ""
                         sourceSize.width: parent.iconSize
                         sourceSize.height: parent.iconSize
                         width: parent.iconSize
                         height: parent.iconSize
                         fillMode: Image.PreserveAspectFit
+                        visible: parent.iconIsUrl && status === Image.Ready
+                    }
+                    // Covers the themed-name case, and keeps the tile from going
+                    // blank while a URL loads or when it fails to load.
+                    Kirigami.Icon {
+                        anchors.centerIn: parent
+                        visible: !tileImage.visible
+                        source: (parent.iconIsUrl || parent.iconSource.length === 0) ? "application-x-executable" : parent.iconSource
+                        width: parent.iconSize
+                        height: parent.iconSize
+                        opacity: (parent.iconIsUrl || parent.iconSource.length === 0) ? 0.4 : 1.0
                     }
                 }
-                Label {
-                    width: parent.width
-                    text: model.name ? model.name : model.appId
-                    font.bold: true
-                    elide: Text.ElideRight
-                    maximumLineCount: 1
-                }
-                Label {
-                    width: parent.width
-                    text: model.summary
-                    opacity: 0.7
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 3
-                    elide: Text.ElideRight
-                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.alignment: Qt.AlignVCenter
+                    spacing: Kirigami.Units.smallSpacing
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: model.name ? model.name : model.appId
+                        font.bold: true
+                        elide: Text.ElideRight
+                        maximumLineCount: 1
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        text: model.summary
+                        opacity: 0.7
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
+                        font.pointSize: Kirigami.Theme.smallFont.pointSize
+                    }
                 }
             }
         }
@@ -304,7 +323,7 @@ Kirigami.ApplicationWindow {
 
                         ListView {
                             width: parent.width
-                            height: Kirigami.Units.gridUnit * 13 + Kirigami.Units.largeSpacing
+                            height: window.tileHeight + Kirigami.Units.largeSpacing
                             orientation: ListView.Horizontal
                             clip: true
                             spacing: Kirigami.Units.smallSpacing
@@ -326,7 +345,7 @@ Kirigami.ApplicationWindow {
                         }
                         ListView {
                             width: parent.width
-                            height: Kirigami.Units.gridUnit * 13 + Kirigami.Units.largeSpacing
+                            height: window.tileHeight + Kirigami.Units.largeSpacing
                             orientation: ListView.Horizontal
                             clip: true
                             spacing: Kirigami.Units.smallSpacing
@@ -377,7 +396,7 @@ Kirigami.ApplicationWindow {
                     height: parent.height - queryField.height - Kirigami.Units.smallSpacing
                     clip: true
                     cellWidth: Kirigami.Units.gridUnit * 13
-                    cellHeight: Kirigami.Units.gridUnit * 14
+                    cellHeight: window.tileHeight + Kirigami.Units.gridUnit
                     model: backend.searchResults
                     delegate: exploreTile
                 }
@@ -400,7 +419,7 @@ Kirigami.ApplicationWindow {
                 anchors.fill: parent
                 clip: true
                 cellWidth: Kirigami.Units.gridUnit * 13
-                cellHeight: Kirigami.Units.gridUnit * 14
+                cellHeight: window.tileHeight + Kirigami.Units.gridUnit
                 model: backend.installedApps
                 delegate: exploreTile
             }
@@ -427,7 +446,7 @@ Kirigami.ApplicationWindow {
                 anchors.fill: parent
                 clip: true
                 cellWidth: Kirigami.Units.gridUnit * 13
-                cellHeight: Kirigami.Units.gridUnit * 14
+                cellHeight: window.tileHeight + Kirigami.Units.gridUnit
                 model: backend.updates
                 delegate: exploreTile
             }

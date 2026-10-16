@@ -52,6 +52,16 @@ QString humanSize(quint64 bytes)
     return QStringLiteral("%1 %2").arg(QString::number(value, 'f', 1)).arg(QLatin1String(units[unit]));
 }
 
+// AppStream component ids and Flatpak ref names do not always agree: some
+// upstream metainfo files declare a `.desktop`-suffixed id (e.g.
+// "org.kde.dolphin.desktop") while the Flatpak ref is spelled without it
+// ("org.kde.dolphin"). Normalise the id so both spellings can be compared.
+QString flatpakIdForComponentId(const QString &appId)
+{
+    constexpr qsizetype desktopSuffixLength = 8; // strlen(".desktop")
+    return appId.endsWith(QLatin1String(".desktop")) ? appId.chopped(desktopSuffixLength) : appId;
+}
+
 #ifdef HAVE_FLATPAK
 EntryData entryFromRef(FlatpakRef *ref, const QString &summary, bool installed)
 {
@@ -76,6 +86,69 @@ QString installedDisplayName(FlatpakRef *ref)
         }
     }
     return QString::fromUtf8(flatpak_ref_get_name(ref));
+}
+
+// Resolve the icon an installed app is deployed with. Every app ships its icon
+// inside its deployment directory, so this is the most reliable icon source and
+// it also works for remotes that carry no AppStream data at all.
+QString deploymentIconUrl(FlatpakInstalledRef *ref, const QString &appId)
+{
+    const char *deployDir = flatpak_installed_ref_get_deploy_dir(ref);
+    if (!deployDir)
+        return QString();
+
+    const QString deploy = QString::fromUtf8(deployDir);
+    const QString iconsRoot = deploy + QStringLiteral("/files/share/icons");
+
+    // The icon is usually named after the app id, but the exported desktop file
+    // is authoritative when it declares a different name.
+    QStringList names{appId};
+    QFile desktopFile(deploy + QStringLiteral("/files/share/applications/") + appId + QStringLiteral(".desktop"));
+    if (desktopFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        static const QRegularExpression iconEntry(QStringLiteral("^Icon=(\\S+)\\s*$"),
+                                                  QRegularExpression::MultilineOption);
+        const auto match = iconEntry.match(QString::fromUtf8(desktopFile.readAll()));
+        if (match.hasMatch()) {
+            const QString iconName = match.captured(1);
+            if (!iconName.isEmpty() && !names.contains(iconName))
+                names << iconName;
+        }
+    }
+
+    // Prefer an icon from an apps/ directory, then a scalable vector icon, then
+    // the largest available raster size.
+    QString bestPath;
+    int bestScore = -1;
+    QDirIterator it(iconsRoot, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        it.next();
+        const QFileInfo info = it.fileInfo();
+        if (!names.contains(info.completeBaseName()))
+            continue;
+
+        int score = 0;
+        if (QDir(info.absolutePath()).dirName() == QLatin1String("apps"))
+            score += 1000000;
+
+        const QString themeDir = info.absolutePath().section(QLatin1Char('/'), -2, -2); // e.g. "128x128"
+        if (themeDir == QLatin1String("scalable")) {
+            score += 100000;
+        } else {
+            bool ok = false;
+            const int pixels = themeDir.section(QLatin1Char('x'), 0, 0).toInt(&ok);
+            if (ok)
+                score += pixels;
+        }
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestPath = info.absoluteFilePath();
+            if (score >= 1100000) // An apps/ scalable icon is the best possible.
+                break;
+        }
+    }
+
+    return bestPath.isEmpty() ? QString() : QUrl::fromLocalFile(bestPath).toString();
 }
 #endif
 
@@ -143,6 +216,28 @@ QString componentIconUrl(AsComponent *component)
             return QString::fromUtf8(name);
     }
     return QString();
+}
+
+// as_pool_get_components_by_id() only matches the id exactly, but some upstream
+// metainfo files declare a `.desktop`-suffixed id while the Flatpak ref (and
+// therefore the id we are asked for) omits it. Try both spellings. Returns an
+// owned box, or nullptr when nothing matches; the caller frees it.
+AsComponentBox *findComponent(AsPool *pool, const QString &appId)
+{
+    AsComponentBox *box = as_pool_get_components_by_id(pool, appId.toUtf8().constData());
+    if (box && as_component_box_len(box) > 0)
+        return box;
+    if (box)
+        g_object_unref(box);
+
+    const QByteArray suffixed = appId.toUtf8() + ".desktop";
+    box = as_pool_get_components_by_id(pool, suffixed.constData());
+    if (box && as_component_box_len(box) > 0)
+        return box;
+    if (box)
+        g_object_unref(box);
+
+    return nullptr;
 }
 
 EntryData entryFromComponent(AsComponent *component)
@@ -239,8 +334,8 @@ AppDetailData appStreamDetails(FlatpakManager *manager, const QString &appId)
         return data;
     }
 
-    AsComponentBox *box = as_pool_get_components_by_id(pool, appId.toUtf8().constData());
-    if (box && as_component_box_len(box) > 0) {
+    AsComponentBox *box = findComponent(pool, appId);
+    if (box) {
         AsComponent *component = as_component_box_index(box, 0);
 
         data.found = true;
@@ -652,6 +747,12 @@ void enrichFromInstalledRef(FlatpakInstalledRef *ref, FlatpakInstallation *insta
         parseMetadataBytes(metadata, data);
 
     const QString appId = QString::fromUtf8(flatpak_ref_get_name(FLATPAK_REF(ref)));
+
+    // AppStream has no component for apps from remotes without metainfo data;
+    // fall back to the icon the app is deployed with.
+    if (data.icon.isEmpty())
+        data.icon = deploymentIconUrl(ref, appId);
+
     g_autoptr(GPtrArray) updates = flatpak_installation_list_installed_refs_for_update(installation, nullptr, nullptr);
     if (updates) {
         for (guint i = 0; i < updates->len; ++i) {
@@ -691,6 +792,10 @@ void enrichFromRemoteRef(FlatpakInstallation *installation, const QString &remot
 
 void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailData &data)
 {
+    // The app id may come from AppStream and carry a `.desktop` suffix that
+    // Flatpak refs never have; compare against the ref spelling.
+    const QString refId = flatpakIdForComponentId(appId);
+
     QList<FlatpakInstallation *> installations;
     if (auto *system = manager->systemInstallation())
         installations << system;
@@ -706,7 +811,10 @@ void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailD
             auto *ref = FLATPAK_INSTALLED_REF(g_ptr_array_index(refs, i));
             if (flatpak_ref_get_kind(FLATPAK_REF(ref)) != FLATPAK_REF_KIND_APP)
                 continue;
-            if (appId == QString::fromUtf8(flatpak_ref_get_name(FLATPAK_REF(ref)))) {
+            if (refId == QString::fromUtf8(flatpak_ref_get_name(FLATPAK_REF(ref)))) {
+                // Hand the real ref name to the UI so install/launch/remove all
+                // operate on a ref that exists.
+                data.appId = refId;
                 enrichFromInstalledRef(ref, installation, data);
                 return;
             }
@@ -732,7 +840,8 @@ void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailD
                 auto *ref = FLATPAK_REF(g_ptr_array_index(refs, j));
                 if (flatpak_ref_get_kind(ref) != FLATPAK_REF_KIND_APP)
                     continue;
-                if (appId == QString::fromUtf8(flatpak_ref_get_name(ref))) {
+                if (refId == QString::fromUtf8(flatpak_ref_get_name(ref))) {
+                    data.appId = refId;
                     enrichFromRemoteRef(installation, remoteName, ref, data);
                     return;
                 }
@@ -809,10 +918,11 @@ bool installedAppIds(FlatpakManager *manager, QSet<QString> *ids)
 // neither installation (it may still be installed for the other scope).
 void removeAppDataIfUninstalled(FlatpakManager *manager, const QString &appId)
 {
+    const QString refId = flatpakIdForComponentId(appId);
     QSet<QString> installed;
-    if (!installedAppIds(manager, &installed) || installed.contains(appId))
+    if (!installedAppIds(manager, &installed) || installed.contains(refId) || installed.contains(appId))
         return;
-    QDir(appDataDir(appId)).removeRecursively();
+    QDir(appDataDir(refId)).removeRecursively();
 }
 
 bool looksLikeAppId(const QString &name)
@@ -1098,6 +1208,8 @@ InstalledLists loadInstalledLists(FlatpakManager *manager)
                 seen.insert(name);
                 EntryData entry = entryFromRef(ref, QCoreApplication::translate("Backend", "Installed"), true);
                 entry.name = installedDisplayName(ref);
+                if (FLATPAK_IS_INSTALLED_REF(ref))
+                    entry.icon = deploymentIconUrl(FLATPAK_INSTALLED_REF(ref), name);
                 lists.installed.append(entry);
             }
         }
@@ -1115,6 +1227,8 @@ InstalledLists loadInstalledLists(FlatpakManager *manager)
                 updateIds.insert(name);
                 EntryData entry = entryFromRef(ref, QCoreApplication::translate("Backend", "Update available"), true);
                 entry.name = installedDisplayName(ref);
+                if (FLATPAK_IS_INSTALLED_REF(ref))
+                    entry.icon = deploymentIconUrl(FLATPAK_INSTALLED_REF(ref), name);
                 lists.updates.append(entry);
             }
         }

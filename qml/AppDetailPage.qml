@@ -66,16 +66,31 @@ Kirigami.Page {
                 visible: page.app && !page.app.loading
                 spacing: Kirigami.Units.largeSpacing
 
-                Image {
+                Item {
                     Layout.alignment: Qt.AlignTop
-                    source: page.app && page.app.icon ? page.app.icon : ""
-                    sourceSize.width: 128
-                    sourceSize.height: 128
                     Layout.preferredWidth: 128
                     Layout.preferredHeight: 128
-                    fillMode: Image.PreserveAspectFit
-                    asynchronous: true
-                    visible: status === Image.Ready
+                    // AppStream may return either an icon URL or a themed name.
+                    readonly property string iconSource: page.app && page.app.icon ? page.app.icon : ""
+                    readonly property bool iconIsUrl: iconSource.indexOf("://") !== -1
+
+                    Image {
+                        id: headerImage
+                        anchors.fill: parent
+                        source: parent.iconIsUrl ? parent.iconSource : ""
+                        sourceSize.width: 128
+                        sourceSize.height: 128
+                        fillMode: Image.PreserveAspectFit
+                        asynchronous: true
+                        visible: parent.iconIsUrl && status === Image.Ready
+                    }
+                    // Themed icon, or a placeholder while a URL loads / on failure.
+                    Kirigami.Icon {
+                        anchors.fill: parent
+                        visible: !headerImage.visible
+                        source: (parent.iconIsUrl || parent.iconSource.length === 0) ? "application-x-executable" : parent.iconSource
+                        opacity: (parent.iconIsUrl || parent.iconSource.length === 0) ? 0.4 : 1.0
+                    }
                 }
 
                 ColumnLayout {

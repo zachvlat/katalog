@@ -10,3 +10,8 @@ git clone https://github.com/zachvlat/qutestore
 cd qutestore
 ./setup-flatpak-build.sh
 ```
+
+## Screenshots
+![alt text](metadata/screenshots/1.png)
+![alt text](metadata/screenshots/2.png)
+![alt text](metadata/screenshots/3.png)
