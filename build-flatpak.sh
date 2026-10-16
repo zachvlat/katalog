@@ -115,8 +115,15 @@ if [[ "$USE_BUILDER_APP" == true ]] || ! command -v flatpak-builder >/dev/null 2
     echo "  env -u XDG_DATA_HOME flatpak install --user -y flathub $RUNTIME//$RUNTIME_VERSION $SDK//$RUNTIME_VERSION" >&2
     exit 1
   fi
+  # The SDK went into the user installation that "flatpak" itself uses, which is
+  # not necessarily $HOME/.local/share/flatpak: under distrobox and similar
+  # setups "flatpak" is a shim (distrobox-host-exec) that runs on the host, whose
+  # home differs from this shell's $HOME. The Builder sandbox runs with that
+  # host-side home, so ask it for $HOME rather than trusting the one we were
+  # started with.
+  builder_home="$(flatpak run --command=sh org.flatpak.Builder -c 'printf %s "$HOME"' 2>/dev/null || true)"
   FLATPAK_BUILDER=(flatpak run
-                   "--env=FLATPAK_USER_DIR=$HOME/.local/share/flatpak"
+                   "--env=FLATPAK_USER_DIR=${builder_home:-$HOME}/.local/share/flatpak"
                    --command=flatpak-builder org.flatpak.Builder)
   # Sandboxed, flatpak-builder mounts the build dir with rofiles-fuse inside its
   # own mount namespace, where the build commands it runs on the host cannot
