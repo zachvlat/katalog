@@ -46,4 +46,14 @@ void LeftoverModel::setLeftovers(const QList<LeftoverData> &leftovers)
     beginResetModel();
     m_leftovers = leftovers;
     endResetModel();
+    Q_EMIT countChanged();
+}
+
+QString LeftoverModel::appIdForPath(const QString &path) const
+{
+    for (const LeftoverData &leftover : m_leftovers) {
+        if (leftover.path == path)
+            return leftover.appId;
+    }
+    return QString();
 }

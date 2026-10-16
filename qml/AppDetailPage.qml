@@ -129,7 +129,10 @@ Kirigami.Page {
                             text: qsTr("Remove")
                             icon.name: "delete"
                             enabled: !page.busy
-                            onClicked: backend.removeApp(page.app.appId)
+                            onClicked: {
+                                deleteDataBox.checked = false
+                                removeDialog.open()
+                            }
                         }
                     }
                 }
@@ -367,6 +370,54 @@ Kirigami.Page {
                 Layout.preferredHeight: Kirigami.Units.largeSpacing
             }
         }
+    }
+
+    // Removal confirmation. The app's own data (~/.var/app/<id>: settings,
+    // profiles, saves) is kept unless the user explicitly opts in.
+    Dialog {
+        id: removeDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(page.width * 0.9, Kirigami.Units.gridUnit * 28)
+        modal: true
+        title: qsTr("Remove %1?").arg(page.app ? page.app.name : "")
+
+        ColumnLayout {
+            width: removeDialog.availableWidth
+            spacing: Kirigami.Units.largeSpacing
+
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                text: qsTr("The application will be uninstalled. Its settings and data are kept, so they are still there if you install it again.")
+            }
+            CheckBox {
+                id: deleteDataBox
+                Layout.fillWidth: true
+                text: qsTr("Also delete its settings and data")
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: deleteDataBox.checked
+                wrapMode: Text.WordWrap
+                color: Kirigami.Theme.negativeTextColor
+                text: qsTr("This permanently deletes ~/.var/app/%1 and cannot be undone.").arg(page.app ? page.app.appId : "")
+            }
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("Remove")
+                icon.name: "delete"
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+            Button {
+                text: qsTr("Cancel")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
+
+        onAccepted: backend.removeApp(page.app.appId, deleteDataBox.checked)
     }
 
     // Full-size view of a screenshot, opened by clicking one in the strip.

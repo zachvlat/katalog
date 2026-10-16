@@ -9,7 +9,7 @@ OUTPUT="${SCRIPT_DIR}/com.zachvlat.qutestore.flatpak"
 REPO="${SCRIPT_DIR}/.flatpak-builder/repo"
 BUILD_DIR="${SCRIPT_DIR}/.flatpak-builder/build"
 STATE_DIR="${SCRIPT_DIR}/.flatpak-builder/state"
-INSTALL=false RUN=false CLEAN=false INCREMENTAL=false
+INSTALL=false RUN=false CLEAN=false USE_BUILDER_APP=false
 JOBS="$(nproc)"
 
 usage() {
@@ -21,10 +21,12 @@ Usage: $(basename "$0") [options]
   --build-dir DIR  Build dir
   --state-dir DIR  flatpak-builder state dir
   --jobs N         Parallel jobs (default $(nproc))
-  --incremental    Keep the previous build dir (only rebuild what changed)
+  --incremental    Accepted for compatibility; rebuilds are always incremental
   --install        Install after building (--user)
   --run            Install and run
   --clean          Remove previous build dirs
+  --use-builder-app  Build with the org.flatpak.Builder app even if a host
+                     flatpak-builder is installed
   -h, --help       Show help
 EOF
 }
@@ -37,10 +39,11 @@ while [[ $# -gt 0 ]]; do
     --build-dir) BUILD_DIR="$2"; shift 2 ;;
     --state-dir) STATE_DIR="$2"; shift 2 ;;
     --jobs) JOBS="$2"; shift 2 ;;
-    --incremental) INCREMENTAL=true; shift ;;
+    --incremental) shift ;;
     --install) INSTALL=true; shift ;;
     --run) RUN=true; INSTALL=true; shift ;;
     --clean) CLEAN=true; shift ;;
+    --use-builder-app) USE_BUILDER_APP=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -48,6 +51,13 @@ done
 
 if ! command -v flatpak >/dev/null 2>&1; then
   echo "flatpak not found" >&2; exit 1
+fi
+
+# Under sudo, "--user" means root's own (empty) Flatpak installation, so the
+# runtime and SDK installed for the real user look missing.
+if [[ $EUID -eq 0 && -n "${SUDO_USER:-}" ]]; then
+  echo "Do not run this with sudo: build as your own user (it uses your --user Flatpak installation)." >&2
+  exit 1
 fi
 
 # The runtime and SDK the manifest builds against must be installed.
@@ -73,74 +83,56 @@ if ! flatpak info --user "$SDK//$RUNTIME_VERSION" >/dev/null 2>&1 \
   echo "      'unset XDG_DATA_HOME'." >&2
 fi
 
-# The paths the flatpak CLI reports are absolute paths in the host namespace. In
-# containerised views (where the host root is bind mounted at /run/host) they may
-# only be reachable under that prefix.
-resolve_host_path() {
-  if [[ -e "$1" ]]; then
-    printf '%s\n' "$1"
-  elif [[ -e "/run/host$1" ]]; then
-    printf '%s\n' "/run/host$1"
-  else
-    printf '%s\n' "$1"
-  fi
-}
-
 FLATPAK_BUILDER=(flatpak-builder)
-ROFILES=()
-if ! command -v flatpak-builder >/dev/null 2>&1; then
-  BUILDER_LOC="$(flatpak info --user --show-location org.flatpak.Builder 2>/dev/null || true)"
-  if [[ -z "$BUILDER_LOC" ]]; then
-    BUILDER_LOC="$(flatpak info --show-location org.flatpak.Builder 2>/dev/null || true)"
-  fi
-  [[ -n "$BUILDER_LOC" ]] && BUILDER_LOC="$(resolve_host_path "$BUILDER_LOC")"
-  if [[ -z "$BUILDER_LOC" ]]; then
+EXTRA_ARGS=()
+if [[ "$USE_BUILDER_APP" == true ]] || ! command -v flatpak-builder >/dev/null 2>&1; then
+  if ! flatpak info org.flatpak.Builder >/dev/null 2>&1; then
     echo "flatpak-builder is not available. Install one of:" >&2
     echo "  - the flatpak-builder package for your distribution, or" >&2
     echo "  - flatpak install --user -y flathub org.flatpak.Builder" >&2
     exit 1
   fi
-
-  # Use the Builder app's flatpak-builder binary directly instead of running it
-  # inside the Builder sandbox: sandboxed, it resolves the SDK in the app's own
-  # private user installation and therefore cannot see an SDK that was installed
-  # with "flatpak install --user".
-  BUILD_APP="${BUILDER_LOC}/files"
-  if [[ ! -x "${BUILD_APP}/bin/flatpak-builder" ]]; then
-    echo "org.flatpak.Builder does not provide bin/flatpak-builder" >&2; exit 1
+  # Run the Builder app inside its own sandbox, the way Flathub's own builds
+  # do. Its runtime brings the tools flatpak-builder shells out to (tar, xz,
+  # patch, git), so none of them need to be installed on the host.
+  #
+  # Inside the sandbox, libflatpak would look for the user installation in the
+  # app's private data dir (~/.var/app/org.flatpak.Builder/data) and not find
+  # the SDK installed with "flatpak install --user". The real one is mounted
+  # in the sandbox (the app has xdg-data/flatpak access), so point at it.
+  #
+  # The Builder also looks the SDK up on the host through the desktop session,
+  # which always uses the default ~/.local/share/flatpak. If this shell points
+  # XDG_DATA_HOME elsewhere (e.g. a KDE development environment), an SDK
+  # installed from here went into a different installation.
+  if [[ -n "${XDG_DATA_HOME:-}" && "$XDG_DATA_HOME" != "$HOME/.local/share" ]]; then
+    echo "note: ignoring XDG_DATA_HOME=$XDG_DATA_HOME; using $HOME/.local/share/flatpak" >&2
+    unset XDG_DATA_HOME
   fi
-  BUILDER_RUNTIME="$(flatpak info --user --show-runtime org.flatpak.Builder 2>/dev/null || flatpak info --show-runtime org.flatpak.Builder 2>/dev/null || true)"
-  BUILDER_RUNTIME_DIR=""
-  if [[ -n "$BUILDER_RUNTIME" ]]; then
-    _runtime_loc="$(flatpak info --show-location "$BUILDER_RUNTIME" 2>/dev/null || true)"
-    [[ -n "$_runtime_loc" ]] && BUILDER_RUNTIME_DIR="$(resolve_host_path "$_runtime_loc")/files"
+  if ! flatpak info "$SDK//$RUNTIME_VERSION" >/dev/null 2>&1; then
+    echo "$SDK//$RUNTIME_VERSION is not installed where org.flatpak.Builder looks for it." >&2
+    echo "Install it with:" >&2
+    echo "  env -u XDG_DATA_HOME flatpak install --user -y flathub $RUNTIME//$RUNTIME_VERSION $SDK//$RUNTIME_VERSION" >&2
+    exit 1
   fi
+  FLATPAK_BUILDER=(flatpak run
+                   "--env=FLATPAK_USER_DIR=$HOME/.local/share/flatpak"
+                   --command=flatpak-builder org.flatpak.Builder)
+  # Sandboxed, flatpak-builder mounts the build dir with rofiles-fuse inside its
+  # own mount namespace, where the build commands it runs on the host cannot
+  # see it. rofiles-fuse only optimises cache checkouts, so do without it.
+  EXTRA_ARGS=(--disable-rofiles-fuse)
 
-  _libs="${BUILD_APP}/lib"
-  _bins="${BUILD_APP}/bin"
-  if [[ -n "$BUILDER_RUNTIME_DIR" ]]; then
-    _libs="${_libs}:${BUILDER_RUNTIME_DIR}/lib/x86_64-linux-gnu:${BUILDER_RUNTIME_DIR}/lib"
-    # flatpak-builder shells out to a few tools itself (patch, git, ...). Inside its
-    # sandbox those come from the runtime, so do the same when running unsandboxed.
-    _bins="${_bins}:${BUILDER_RUNTIME_DIR}/bin"
-    export XDG_DATA_DIRS="${BUILD_APP}/share:${BUILDER_RUNTIME_DIR}/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
-  fi
-  export PATH="${_bins}:${PATH}"
-  export LD_LIBRARY_PATH="${_libs}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-  FLATPAK_BUILDER=("${BUILD_APP}/bin/flatpak-builder")
-  # Outside the Builder's sandbox its bundled fusermount wrapper cannot call
-  # flatpak-spawn, so rofiles-fuse cannot mount the build dir. The build works the
-  # same without it.
-  ROFILES=(--disable-rofiles-fuse)
-
-  # The Builder's flatpak-builder is built against the freedesktop runtime, so point
-  # its TLS stack at a CA bundle that exists here.
-  for _ca in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt \
-             /run/host/etc/ssl/certs/ca-certificates.crt; do
-    if [[ -r "$_ca" ]]; then
-      export SSL_CERT_FILE="${SSL_CERT_FILE:-$_ca}"
-      export CURL_CA_BUNDLE="${CURL_CA_BUNDLE:-$_ca}"
-      break
+  # The sandbox sees /home and most of the host, but not every directory
+  # (e.g. /root, /tmp or /usr). Fail early with a clear message.
+  for _path in "$MANIFEST" "$(dirname "$REPO")" "$(dirname "$BUILD_DIR")"; do
+    _check="$_path"
+    [[ -e "$_check" ]] || _check="$(dirname "$_check")"
+    if ! flatpak run --command=test org.flatpak.Builder -e "$_check" 2>/dev/null; then
+      echo "The org.flatpak.Builder sandbox cannot access $_check." >&2
+      echo "Move the project (and build directories) under your home directory, or" >&2
+      echo "install your distribution's flatpak-builder package instead." >&2
+      exit 1
     fi
   done
 fi
@@ -153,10 +145,9 @@ if [[ "$CLEAN" == true ]]; then
 fi
 mkdir -p "$(dirname "$REPO")" "$(dirname "$BUILD_DIR")" "$STATE_DIR"
 
+# --force-clean only empties the exported app dir; unchanged modules are reused
+# from the cache in the state dir, so every rebuild only recompiles what changed.
 FORCE_CLEAN=(--force-clean)
-if [[ "$INCREMENTAL" == true ]]; then
-  FORCE_CLEAN=()
-fi
 
 echo "Building $(basename "$MANIFEST") with ${FLATPAK_BUILDER[*]}"
 echo "  repo:      $REPO"
@@ -165,7 +156,7 @@ echo "  jobs:      $JOBS"
 echo "(the first build compiles libflatpak, ostree and friends, so it takes a while)"
 echo
 
-"${FLATPAK_BUILDER[@]}" "${FORCE_CLEAN[@]}" "${ROFILES[@]}" --ccache --jobs="$JOBS" --user \
+"${FLATPAK_BUILDER[@]}" "${FORCE_CLEAN[@]}" "${EXTRA_ARGS[@]}" --ccache --jobs="$JOBS" --user \
   --state-dir="$STATE_DIR" --repo="$REPO" "$BUILD_DIR" "$MANIFEST"
 
 echo
@@ -174,6 +165,10 @@ flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
 
 echo "Bundle: $OUTPUT"
 
-[[ "$INSTALL" == true ]] && flatpak install --user -y "$OUTPUT"
-[[ "$RUN" == true ]] && flatpak run com.zachvlat.qutestore
+if [[ "$INSTALL" == true ]]; then
+  flatpak install --user -y "$OUTPUT"
+fi
+if [[ "$RUN" == true ]]; then
+  flatpak run com.zachvlat.qutestore
+fi
 

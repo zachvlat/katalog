@@ -3,6 +3,8 @@
 #include <QFutureWatcher>
 #include <QObject>
 #include <QTimer>
+
+#include <functional>
 #include <QVariantList>
 
 #include "details.h"
@@ -12,6 +14,8 @@
 #include "leftovermodel.h"
 #include "remotemodel.h"
 #include "transaction.h"
+
+class QNetworkAccessManager;
 
 class Backend : public QObject {
     Q_OBJECT
@@ -29,7 +33,12 @@ class Backend : public QObject {
     Q_PROPERTY(Transaction *currentTransaction READ currentTransaction NOTIFY currentTransactionChanged)
     Q_PROPERTY(RemoteModel *remotes READ remotes CONSTANT)
     Q_PROPERTY(LeftoverModel *leftovers READ leftovers CONSTANT)
+    Q_PROPERTY(bool loadingInstalled READ loadingInstalled NOTIFY installedChanged)
     Q_PROPERTY(bool scanningLeftovers READ scanningLeftovers NOTIFY leftoversChanged)
+    Q_PROPERTY(QString leftoverError READ leftoverError NOTIFY leftoversChanged)
+    Q_PROPERTY(QString remoteMessage READ remoteMessage NOTIFY remoteMessageChanged)
+    Q_PROPERTY(bool remoteBusy READ remoteBusy NOTIFY remoteMessageChanged)
+    Q_PROPERTY(bool remoteSucceeded READ remoteSucceeded NOTIFY remoteMessageChanged)
 public:
     explicit Backend(QObject *parent = nullptr);
 
@@ -47,7 +56,12 @@ public:
     Transaction *currentTransaction() const { return m_transaction; }
     RemoteModel *remotes() const { return m_remotes; }
     LeftoverModel *leftovers() const { return m_leftovers; }
+    bool loadingInstalled() const { return m_loadingInstalled; }
     bool scanningLeftovers() const { return m_scanningLeftovers; }
+    QString leftoverError() const { return m_leftoverError; }
+    QString remoteMessage() const { return m_remoteMessage; }
+    bool remoteBusy() const { return m_remoteBusy; }
+    bool remoteSucceeded() const { return m_remoteSucceeded; }
 
     Q_INVOKABLE void search(const QString &query);
     Q_INVOKABLE void refreshInstalled();
@@ -56,11 +70,13 @@ public:
     Q_INVOKABLE void openApp(const QString &appId);
     Q_INVOKABLE void installApp(const QString &appId);
     Q_INVOKABLE void updateApp(const QString &appId);
-    Q_INVOKABLE void removeApp(const QString &appId);
+    // deleteData also removes ~/.var/app/<appId> once the app is gone.
+    Q_INVOKABLE void removeApp(const QString &appId, bool deleteData = false);
     Q_INVOKABLE void launchApp(const QString &appId);
     Q_INVOKABLE void dismissTransaction();
 
-    // Repositories (Flatpak remotes).
+    // Repositories (Flatpak remotes). A URL ending in .flatpakrepo is downloaded
+    // and used as the remote's description, which carries its GPG key.
     Q_INVOKABLE void refreshRemotes();
     Q_INVOKABLE void addRemote(const QString &name, const QString &url, bool user);
     Q_INVOKABLE void removeRemote(const QString &name, bool user);
@@ -78,13 +94,19 @@ Q_SIGNALS:
     void exploreChanged();
     void categoryChanged();
     void currentTransactionChanged();
+    void installedChanged();
     void leftoversChanged();
+    void remoteMessageChanged();
 
 private:
-    void startTransaction(int kind, const QString &appId);
+    void startTransaction(int kind, const QString &appId, bool deleteData = false);
+    bool beginRemoteOperation();
+    void runRemoteOperation(bool user, std::function<RemoteOpResult(FlatpakInstallation *)> operation);
+    void finishRemoteOperation(const RemoteOpResult &result);
     void explorePartDone();
     void buildExplore();
     void notifyUpdates(int count);
+    void applyInstalledLists(const InstalledLists &lists);
 
     FlatpakManager *m_flatpak = nullptr;
     EntryModel *m_search = nullptr;
@@ -109,14 +131,25 @@ private:
 
     QTimer *m_updateTimer = nullptr;
     int m_lastNotifiedUpdates = -1;
+    bool m_loadingInstalled = false;
+    bool m_installedRefreshQueued = false;
+    bool m_notifyAfterRefresh = false;
 
     bool m_scanningLeftovers = false;
+    QString m_leftoverError;
+
+    QNetworkAccessManager *m_nam = nullptr;
+    QString m_remoteMessage;
+    bool m_remoteBusy = false;
+    bool m_remoteSucceeded = false;
 
     QFutureWatcher<QList<EntryData>> *m_watcher = nullptr;
     QFutureWatcher<AppDetailData> *m_detailsWatcher = nullptr;
     QFutureWatcher<ExploreResult> *m_exploreWatcher = nullptr;
     QFutureWatcher<QList<EntryData>> *m_categoryWatcher = nullptr;
-    QFutureWatcher<QList<LeftoverData>> *m_leftoverWatcher = nullptr;
+    QFutureWatcher<LeftoverScan> *m_leftoverWatcher = nullptr;
+    QFutureWatcher<InstalledLists> *m_installedWatcher = nullptr;
+    QFutureWatcher<RemoteOpResult> *m_remoteWatcher = nullptr;
     quint64 m_searchGeneration = 0;
     quint64 m_detailsGeneration = 0;
     quint64 m_categoryGeneration = 0;

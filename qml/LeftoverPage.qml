@@ -99,17 +99,65 @@ Kirigami.ScrollablePage {
 
                         Button {
                             text: qsTr("Delete")
-                            onClicked: backend.removeLeftover(model.path)
+                            enabled: !backend.scanningLeftovers
+                            onClicked: {
+                                confirmDialog.appId = model.appId
+                                confirmDialog.path = model.path
+                                confirmDialog.sizeText = model.sizeText
+                                confirmDialog.open()
+                            }
                         }
                     }
                 }
             }
         }
 
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            visible: !backend.scanningLeftovers && backend.leftoverError.length > 0
+            type: Kirigami.MessageType.Warning
+            text: backend.leftoverError
+        }
+
         Label {
-            visible: !backend.scanningLeftovers && backend.leftovers.count === 0
+            visible: !backend.scanningLeftovers && backend.leftoverError.length === 0
+                     && backend.leftovers.count === 0
             text: qsTr("No leftover files found.")
             opacity: 0.7
         }
+    }
+
+    Dialog {
+        id: confirmDialog
+        property string appId
+        property string path
+        property string sizeText
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(leftoverPage.width * 0.9, Kirigami.Units.gridUnit * 28)
+        modal: true
+        title: qsTr("Delete data of %1?").arg(confirmDialog.appId)
+
+        Label {
+            width: confirmDialog.availableWidth
+            wrapMode: Text.WordWrap
+            text: qsTr("%1 (%2) will be permanently deleted. This cannot be undone.")
+                      .arg(confirmDialog.path).arg(confirmDialog.sizeText)
+        }
+
+        footer: DialogButtonBox {
+            Button {
+                text: qsTr("Delete")
+                icon.name: "delete"
+                DialogButtonBox.buttonRole: DialogButtonBox.AcceptRole
+            }
+            Button {
+                text: qsTr("Cancel")
+                DialogButtonBox.buttonRole: DialogButtonBox.RejectRole
+            }
+        }
+
+        onAccepted: backend.removeLeftover(confirmDialog.path)
     }
 }

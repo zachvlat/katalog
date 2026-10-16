@@ -14,17 +14,22 @@
 #endif
 
 #include <QtConcurrent/QtConcurrentRun>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QHash>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSet>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QUrl>
 #include <QVariantMap>
 
 #include <algorithm>
@@ -741,19 +746,13 @@ void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailD
 
 namespace {
 
-// Mirrors what `flatpak uninstall --delete-data` removes: the per-app XDG base
-// directory Flatpak creates for every app, plus the app's own persistent "data"
-// directory inside each installation. Best-effort, since the system-wide data
-// directory is owned by root and may not be removable from inside the sandbox.
-void removeAppData(const QString &appId)
+// The per-app directory Flatpak keeps the user's data, config and cache in.
+// This is the only place app data lives: the app directories inside an
+// installation (~/.local/share/flatpak/app, /var/lib/flatpak/app) hold the
+// deployed app itself and are managed by libflatpak, never by us.
+QString appDataDir(const QString &appId)
 {
-    const QString home = QDir::homePath();
-    QDir(home + QStringLiteral("/.var/app/") + appId).removeRecursively();
-
-    const QString dataHome = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
-    if (!dataHome.isEmpty())
-        QDir(dataHome + QStringLiteral("/flatpak/app/") + appId + QStringLiteral("/data")).removeRecursively();
-    QDir(QStringLiteral("/var/lib/flatpak/app/") + appId + QStringLiteral("/data")).removeRecursively();
+    return QDir::homePath() + QStringLiteral("/.var/app/") + appId;
 }
 
 // Runs the AppStream pass for the Explore page. Kept as a free function so it is
@@ -768,32 +767,52 @@ ExploreResult loadExploreData(FlatpakManager *manager)
 #endif
 }
 
-// The set of application ids currently installed in either installation.
-QSet<QString> installedAppIds(FlatpakManager *manager)
+// Collects the application ids installed in either installation. Returns false
+// when the list cannot be trusted (no Flatpak support, no installation, or a
+// listing failed): callers that delete data must then do nothing, because an
+// empty or partial list would make installed apps look uninstalled.
+bool installedAppIds(FlatpakManager *manager, QSet<QString> *ids)
 {
-    QSet<QString> ids;
 #ifdef HAVE_FLATPAK
     QList<FlatpakInstallation *> installations;
     if (auto *system = manager->systemInstallation())
         installations << system;
     if (auto *user = manager->userInstallation())
         installations << user;
+    if (installations.isEmpty())
+        return false;
 
     for (FlatpakInstallation *installation : installations) {
-        g_autoptr(GPtrArray) refs = flatpak_installation_list_installed_refs(installation, nullptr, nullptr);
-        if (!refs)
-            continue;
+        GError *error = nullptr;
+        g_autoptr(GPtrArray) refs = flatpak_installation_list_installed_refs(installation, nullptr, &error);
+        if (!refs) {
+            qWarning() << "Could not list installed refs:" << (error ? error->message : "unknown error");
+            g_clear_error(&error);
+            return false;
+        }
         for (guint i = 0; i < refs->len; ++i) {
             auto *ref = FLATPAK_REF(g_ptr_array_index(refs, i));
             if (flatpak_ref_get_kind(ref) != FLATPAK_REF_KIND_APP)
                 continue;
-            ids.insert(QString::fromUtf8(flatpak_ref_get_name(ref)));
+            ids->insert(QString::fromUtf8(flatpak_ref_get_name(ref)));
         }
     }
+    return true;
 #else
     Q_UNUSED(manager)
+    Q_UNUSED(ids)
+    return false;
 #endif
-    return ids;
+}
+
+// Deletes an app's data directory, but only once the app is installed in
+// neither installation (it may still be installed for the other scope).
+void removeAppDataIfUninstalled(FlatpakManager *manager, const QString &appId)
+{
+    QSet<QString> installed;
+    if (!installedAppIds(manager, &installed) || installed.contains(appId))
+        return;
+    QDir(appDataDir(appId)).removeRecursively();
 }
 
 bool looksLikeAppId(const QString &name)
@@ -829,59 +848,45 @@ quint64 directorySize(const QString &path)
     return total;
 }
 
-// Finds data directories that belong to applications which are no longer
-// installed (the "leftover files" shown on the cleanup page).
-QList<LeftoverData> scanLeftovers(FlatpakManager *manager)
+// Finds data directories in ~/.var/app that belong to applications which are
+// no longer installed (the "leftover files" shown on the cleanup page).
+LeftoverScan scanLeftovers(FlatpakManager *manager)
 {
-    const QSet<QString> installed = installedAppIds(manager);
+    LeftoverScan scan;
 
-    struct Candidate {
-        QString dir;
-        bool isUser;
-    };
-    QList<Candidate> candidates;
-    candidates.append({QDir::homePath() + QStringLiteral("/.var/app"), true});
-    const QString dataHome = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
-    if (!dataHome.isEmpty())
-        candidates.append({dataHome + QStringLiteral("/flatpak/app"), true});
-    candidates.append({QStringLiteral("/var/lib/flatpak/app"), false});
-
-    QList<LeftoverData> leftovers;
-    QSet<QString> seenPaths;
-
-    for (const Candidate &candidate : candidates) {
-        QDir dir(candidate.dir);
-        if (!dir.exists())
-            continue;
-
-        const QStringList entries = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-        for (const QString &name : entries) {
-            if (isExtensionRef(name) || !looksLikeAppId(name))
-                continue;
-            if (installed.contains(name))
-                continue;
-
-            const QString path = dir.absoluteFilePath(name);
-            if (seenPaths.contains(path))
-                continue;
-            seenPaths.insert(path);
-
-            LeftoverData data;
-            data.appId = name;
-            data.path = path;
-            data.isUser = candidate.isUser;
-            data.size = directorySize(path);
-            data.sizeText = humanSize(data.size);
-            if (data.sizeText.isEmpty())
-                data.sizeText = QStringLiteral("0 B");
-            leftovers.append(data);
-        }
+    QSet<QString> installed;
+    if (!installedAppIds(manager, &installed)) {
+        scan.error = QObject::tr("The list of installed applications could not be read, "
+                                 "so leftover files cannot be told apart from the data of installed apps.");
+        return scan;
     }
 
-    std::sort(leftovers.begin(), leftovers.end(), [](const LeftoverData &a, const LeftoverData &b) {
+    QDir dir(QDir::homePath() + QStringLiteral("/.var/app"));
+    if (!dir.exists())
+        return scan;
+
+    const QStringList entries = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString &name : entries) {
+        if (isExtensionRef(name) || !looksLikeAppId(name))
+            continue;
+        if (installed.contains(name) || name == QLatin1String("com.zachvlat.qutestore"))
+            continue;
+
+        LeftoverData data;
+        data.appId = name;
+        data.path = dir.absoluteFilePath(name);
+        data.isUser = true;
+        data.size = directorySize(data.path);
+        data.sizeText = humanSize(data.size);
+        if (data.sizeText.isEmpty())
+            data.sizeText = QStringLiteral("0 B");
+        scan.items.append(data);
+    }
+
+    std::sort(scan.items.begin(), scan.items.end(), [](const LeftoverData &a, const LeftoverData &b) {
         return a.size > b.size;
     });
-    return leftovers;
+    return scan;
 }
 
 AppDetailData loadDetails(FlatpakManager *manager, const QString &appId, quint64 generation)
@@ -915,6 +920,7 @@ Backend::Backend(QObject *parent)
     m_remotes = new RemoteModel(this);
     m_leftovers = new LeftoverModel(this);
     m_flathub = new FlathubClient(this);
+    m_nam = new QNetworkAccessManager(this);
 
     m_watcher = new QFutureWatcher<QList<EntryData>>(this);
     connect(m_watcher, &QFutureWatcher<QList<EntryData>>::finished, this, [this]() {
@@ -962,9 +968,19 @@ Backend::Backend(QObject *parent)
         Q_EMIT categoryChanged();
     });
 
-    m_leftoverWatcher = new QFutureWatcher<QList<LeftoverData>>(this);
-    connect(m_leftoverWatcher, &QFutureWatcher<QList<LeftoverData>>::finished, this, [this]() {
-        m_leftovers->setLeftovers(m_leftoverWatcher->result());
+    m_remoteWatcher = new QFutureWatcher<RemoteOpResult>(this);
+    connect(m_remoteWatcher, &QFutureWatcher<RemoteOpResult>::finished, this,
+            [this]() { finishRemoteOperation(m_remoteWatcher->result()); });
+
+    m_installedWatcher = new QFutureWatcher<InstalledLists>(this);
+    connect(m_installedWatcher, &QFutureWatcher<InstalledLists>::finished, this,
+            [this]() { applyInstalledLists(m_installedWatcher->result()); });
+
+    m_leftoverWatcher = new QFutureWatcher<LeftoverScan>(this);
+    connect(m_leftoverWatcher, &QFutureWatcher<LeftoverScan>::finished, this, [this]() {
+        const LeftoverScan scan = m_leftoverWatcher->result();
+        m_leftovers->setLeftovers(scan.items);
+        m_leftoverError = scan.error;
         m_scanningLeftovers = false;
         Q_EMIT leftoversChanged();
     });
@@ -1051,19 +1067,22 @@ void Backend::search(const QString &query)
 #endif
 }
 
-void Backend::refreshInstalled()
-{
-    m_installed->clear();
-    m_updates->clear();
+namespace {
 
+// Lists installed apps and pending updates. Runs on a worker thread:
+// list_installed_refs_for_update() contacts every remote, so it can take
+// seconds (or hang until a network timeout).
+InstalledLists loadInstalledLists(FlatpakManager *manager)
+{
+    InstalledLists lists;
 #ifdef HAVE_FLATPAK
     QSet<QString> seen;
     QSet<QString> updateIds;
 
     QList<FlatpakInstallation *> installations;
-    if (auto *system = m_flatpak->systemInstallation())
+    if (auto *system = manager->systemInstallation())
         installations << system;
-    if (auto *user = m_flatpak->userInstallation())
+    if (auto *user = manager->userInstallation())
         installations << user;
 
     for (FlatpakInstallation *installation : installations) {
@@ -1077,9 +1096,9 @@ void Backend::refreshInstalled()
                 if (seen.contains(name))
                     continue;
                 seen.insert(name);
-                EntryData entry = entryFromRef(ref, tr("Installed"), true);
+                EntryData entry = entryFromRef(ref, QCoreApplication::translate("Backend", "Installed"), true);
                 entry.name = installedDisplayName(ref);
-                m_installed->append(entry);
+                lists.installed.append(entry);
             }
         }
 
@@ -1094,13 +1113,58 @@ void Backend::refreshInstalled()
                 if (updateIds.contains(name))
                     continue;
                 updateIds.insert(name);
-                EntryData entry = entryFromRef(ref, tr("Update available"), true);
+                EntryData entry = entryFromRef(ref, QCoreApplication::translate("Backend", "Update available"), true);
                 entry.name = installedDisplayName(ref);
-                m_updates->append(entry);
+                lists.updates.append(entry);
             }
         }
     }
+#else
+    Q_UNUSED(manager)
 #endif
+    return lists;
+}
+
+} // namespace
+
+void Backend::refreshInstalled()
+{
+    // One listing at a time; a request that arrives meanwhile (e.g. a
+    // transaction finishing during the hourly check) runs right after it.
+    if (m_loadingInstalled) {
+        m_installedRefreshQueued = true;
+        return;
+    }
+
+    m_loadingInstalled = true;
+    Q_EMIT installedChanged();
+    m_installedWatcher->setFuture(QtConcurrent::run([this]() { return loadInstalledLists(m_flatpak); }));
+}
+
+void Backend::applyInstalledLists(const InstalledLists &lists)
+{
+    // Replace the rows in one step so an open Installed/Updates page never
+    // flashes empty.
+    m_installed->setEntries(lists.installed);
+    m_updates->setEntries(lists.updates);
+    m_loadingInstalled = false;
+    Q_EMIT installedChanged();
+
+    if (m_notifyAfterRefresh) {
+        m_notifyAfterRefresh = false;
+        const int count = lists.updates.size();
+        if (count > 0 && count != m_lastNotifiedUpdates) {
+            m_lastNotifiedUpdates = count;
+            notifyUpdates(count);
+        } else if (count == 0) {
+            m_lastNotifiedUpdates = 0;
+        }
+    }
+
+    if (m_installedRefreshQueued) {
+        m_installedRefreshQueued = false;
+        refreshInstalled();
+    }
 }
 
 void Backend::loadExplore()
@@ -1236,9 +1300,9 @@ void Backend::updateApp(const QString &appId)
     startTransaction(Transaction::Update, appId);
 }
 
-void Backend::removeApp(const QString &appId)
+void Backend::removeApp(const QString &appId, bool deleteData)
 {
-    startTransaction(Transaction::Remove, appId);
+    startTransaction(Transaction::Remove, appId, deleteData);
 }
 
 void Backend::launchApp(const QString &appId)
@@ -1268,7 +1332,7 @@ void Backend::dismissTransaction()
     Q_EMIT currentTransactionChanged();
 }
 
-void Backend::startTransaction(int kind, const QString &appId)
+void Backend::startTransaction(int kind, const QString &appId, bool deleteData)
 {
     if (m_transaction && m_transaction->running())
         return; // A transaction is already in flight.
@@ -1283,10 +1347,11 @@ void Backend::startTransaction(int kind, const QString &appId)
     Q_EMIT currentTransactionChanged();
 
     connect(transaction, &Transaction::completed, this, &Backend::refreshInstalled);
-    connect(transaction, &Transaction::completed, this, [this, appId, transaction]() {
-        // A removal should also drop the app's leftover data.
-        if (transaction->operation() == QStringLiteral("remove"))
-            removeAppData(appId);
+    connect(transaction, &Transaction::completed, this, [this, appId, deleteData]() {
+        // The user's data is only deleted when they explicitly asked for it in
+        // the removal dialog, like `flatpak uninstall --delete-data`.
+        if (deleteData)
+            removeAppDataIfUninstalled(m_flatpak, appId);
         // Keep an open detail page in sync after install/update/remove.
         if (m_details && m_details->appId() == appId)
             openApp(appId);
@@ -1337,92 +1402,222 @@ void Backend::refreshRemotes()
     m_remotes->setRemotes(remotes);
 }
 
-void Backend::addRemote(const QString &name, const QString &url, bool user)
+
+// Remote (repository) operations. Each one runs on a worker thread: changing a
+// system-wide remote goes through the Flatpak system helper and can wait on a
+// polkit password prompt, and adding a remote downloads its AppStream bundle.
+// Neither may block the UI.
+
+#ifdef HAVE_FLATPAK
+namespace {
+
+QString errorText(GError *error, const char *fallback)
+{
+    return QString::fromUtf8(error && error->message ? error->message : fallback);
+}
+
+// Adds a configured remote and pulls its AppStream metadata so its apps show up
+// in Explore and search. A failed metadata download does not undo the add: the
+// next refresh retries it.
+RemoteOpResult addConfiguredRemote(FlatpakInstallation *installation, FlatpakRemote *remote, const QString &name)
+{
+    RemoteOpResult result;
+    GError *error = nullptr;
+    if (!flatpak_installation_add_remote(installation, remote, TRUE, nullptr, &error)) {
+        result.message = QCoreApplication::translate("Backend", "Could not add “%1”: %2")
+                             .arg(name, errorText(error, "unknown error"));
+        g_clear_error(&error);
+        return result;
+    }
+
+    gboolean changed = FALSE;
+    if (!flatpak_installation_update_appstream_sync(installation, name.toUtf8().constData(), nullptr, &changed,
+                                                    nullptr, &error)) {
+        qWarning() << "Could not update AppStream for" << name << ":" << errorText(error, "unknown error");
+        g_clear_error(&error);
+    }
+
+    result.succeeded = true;
+    result.reloadExplore = true;
+    result.message = QCoreApplication::translate("Backend", "Added “%1”.").arg(name);
+    return result;
+}
+
+// A bare repository URL: only works for repositories that are not signed.
+RemoteOpResult addRemoteFromUrl(FlatpakInstallation *installation, const QString &name, const QString &url)
+{
+    g_autoptr(FlatpakRemote) remote = flatpak_remote_new(name.toUtf8().constData());
+    flatpak_remote_set_url(remote, url.toUtf8().constData());
+    return addConfiguredRemote(installation, remote, name);
+}
+
+// A downloaded .flatpakrepo file, which carries the remote's GPG key.
+RemoteOpResult addRemoteFromFile(FlatpakInstallation *installation, const QString &name, const QByteArray &file)
+{
+    g_autoptr(GBytes) bytes = g_bytes_new(file.constData(), file.size());
+    GError *error = nullptr;
+    g_autoptr(FlatpakRemote) remote = flatpak_remote_new_from_file(name.toUtf8().constData(), bytes, &error);
+    if (!remote) {
+        RemoteOpResult result;
+        result.message = QCoreApplication::translate("Backend", "Not a valid repository file: %1")
+                             .arg(errorText(error, "unknown error"));
+        g_clear_error(&error);
+        return result;
+    }
+    return addConfiguredRemote(installation, remote, name);
+}
+
+RemoteOpResult removeRemoteSync(FlatpakInstallation *installation, const QString &name)
+{
+    RemoteOpResult result;
+    GError *error = nullptr;
+    if (!flatpak_installation_remove_remote(installation, name.toUtf8().constData(), nullptr, &error)) {
+        result.message = QCoreApplication::translate("Backend", "Could not remove “%1”: %2")
+                             .arg(name, errorText(error, "unknown error"));
+        g_clear_error(&error);
+        return result;
+    }
+    result.succeeded = true;
+    result.reloadExplore = true;
+    result.message = QCoreApplication::translate("Backend", "Removed “%1”.").arg(name);
+    return result;
+}
+
+RemoteOpResult setRemoteEnabledSync(FlatpakInstallation *installation, const QString &name, bool enabled)
+{
+    RemoteOpResult result;
+    GError *error = nullptr;
+    g_autoptr(FlatpakRemote) remote =
+        flatpak_installation_get_remote_by_name(installation, name.toUtf8().constData(), nullptr, &error);
+    if (remote) {
+        flatpak_remote_set_disabled(remote, !enabled);
+        if (flatpak_installation_modify_remote(installation, remote, nullptr, &error)) {
+            result.succeeded = true;
+            result.reloadExplore = true;
+            result.message = enabled ? QCoreApplication::translate("Backend", "Enabled “%1”.").arg(name)
+                                     : QCoreApplication::translate("Backend", "Disabled “%1”.").arg(name);
+            return result;
+        }
+    }
+    result.message = QCoreApplication::translate("Backend", "Could not change “%1”: %2")
+                         .arg(name, errorText(error, "unknown error"));
+    g_clear_error(&error);
+    return result;
+}
+
+} // namespace
+#endif
+
+bool Backend::beginRemoteOperation()
+{
+    if (m_remoteBusy)
+        return false;
+    m_remoteBusy = true;
+    m_remoteMessage.clear();
+    Q_EMIT remoteMessageChanged();
+    return true;
+}
+
+void Backend::runRemoteOperation(bool user, std::function<RemoteOpResult(FlatpakInstallation *)> operation)
 {
 #ifdef HAVE_FLATPAK
     FlatpakInstallation *installation = user ? m_flatpak->userInstallation() : m_flatpak->systemInstallation();
     if (!installation) {
-        qWarning() << "No" << (user ? "user" : "system") << "installation available to add a remote";
+        RemoteOpResult result;
+        result.message = user ? tr("No user installation is available.") : tr("No system installation is available.");
+        finishRemoteOperation(result);
         return;
     }
+    m_remoteWatcher->setFuture(
+        QtConcurrent::run([installation, operation = std::move(operation)]() { return operation(installation); }));
+#else
+    Q_UNUSED(user)
+    Q_UNUSED(operation)
+    RemoteOpResult result;
+    result.message = tr("Flatpak support is not available in this build.");
+    finishRemoteOperation(result);
+#endif
+}
 
-    g_autoptr(FlatpakRemote) remote = flatpak_remote_new(name.toUtf8().constData());
-    flatpak_remote_set_url(remote, url.toUtf8().constData());
-
-    GError *error = nullptr;
-    if (!flatpak_installation_add_remote(installation, remote, TRUE, nullptr, &error)) {
-        qWarning() << "Could not add remote" << name << ":" << (error ? error->message : "unknown error");
-        g_clear_error(&error);
-        return;
-    }
-
+void Backend::finishRemoteOperation(const RemoteOpResult &result)
+{
+    m_remoteBusy = false;
+    m_remoteMessage = result.message;
+    m_remoteSucceeded = result.succeeded;
+    Q_EMIT remoteMessageChanged();
     refreshRemotes();
+    // The set of remotes decides which apps Explore can show.
+    if (result.reloadExplore)
+        loadExplore();
+}
 
-    // Pull the new remote's AppStream metadata so its apps appear in Explore and
-    // search. Runs off the main thread because it may hit the network.
-    QtConcurrent::run([installation, name]() {
-        GError *error = nullptr;
-        gboolean out_changed = FALSE;
-        flatpak_installation_update_appstream_sync(installation, name.toUtf8().constData(), nullptr, &out_changed, nullptr, &error);
-        if (error) {
-            qWarning() << "Could not update AppStream for" << name << ":" << error->message;
-            g_clear_error(&error);
-        }
+void Backend::addRemote(const QString &name, const QString &url, bool user)
+{
+    if (name.isEmpty() || url.isEmpty() || !beginRemoteOperation())
+        return;
+
+    // A .flatpakrepo file describes the remote completely, including the GPG
+    // key its content is signed with. Without that key a signed remote such as
+    // Flathub can be added but nothing can be installed from it.
+    if (url.endsWith(QLatin1String(".flatpakrepo"), Qt::CaseInsensitive)) {
+        QNetworkRequest request{QUrl(url)};
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        request.setTransferTimeout(15000);
+        QNetworkReply *reply = m_nam->get(request);
+        connect(reply, &QNetworkReply::finished, this, [this, reply, name, user]() {
+            reply->deleteLater();
+            if (reply->error() != QNetworkReply::NoError) {
+                RemoteOpResult result;
+                result.message = tr("Could not download the repository file: %1").arg(reply->errorString());
+                finishRemoteOperation(result);
+                return;
+            }
+            const QByteArray file = reply->readAll();
+#ifdef HAVE_FLATPAK
+            runRemoteOperation(user, [name, file](FlatpakInstallation *installation) {
+                return addRemoteFromFile(installation, name, file);
+            });
+#else
+            Q_UNUSED(file)
+            runRemoteOperation(user, {});
+#endif
+        });
+        return;
+    }
+
+#ifdef HAVE_FLATPAK
+    runRemoteOperation(user, [name, url](FlatpakInstallation *installation) {
+        return addRemoteFromUrl(installation, name, url);
     });
 #else
-    Q_UNUSED(name)
-    Q_UNUSED(url)
-    Q_UNUSED(user)
+    runRemoteOperation(user, {});
 #endif
 }
 
 void Backend::removeRemote(const QString &name, bool user)
 {
+    if (!beginRemoteOperation())
+        return;
 #ifdef HAVE_FLATPAK
-    FlatpakInstallation *installation = user ? m_flatpak->userInstallation() : m_flatpak->systemInstallation();
-    if (!installation)
-        return;
-
-    GError *error = nullptr;
-    if (!flatpak_installation_remove_remote(installation, name.toUtf8().constData(), nullptr, &error)) {
-        qWarning() << "Could not remove remote" << name << ":" << (error ? error->message : "unknown error");
-        g_clear_error(&error);
-        return;
-    }
-    refreshRemotes();
+    runRemoteOperation(user, [name](FlatpakInstallation *installation) { return removeRemoteSync(installation, name); });
 #else
     Q_UNUSED(name)
-    Q_UNUSED(user)
+    runRemoteOperation(user, {});
 #endif
 }
 
 void Backend::setRemoteEnabled(const QString &name, bool user, bool enabled)
 {
+    if (!beginRemoteOperation())
+        return;
 #ifdef HAVE_FLATPAK
-    FlatpakInstallation *installation = user ? m_flatpak->userInstallation() : m_flatpak->systemInstallation();
-    if (!installation)
-        return;
-
-    GError *error = nullptr;
-    g_autoptr(FlatpakRemote) remote =
-        flatpak_installation_get_remote_by_name(installation, name.toUtf8().constData(), nullptr, &error);
-    if (!remote) {
-        qWarning() << "Could not load remote" << name << ":" << (error ? error->message : "unknown error");
-        g_clear_error(&error);
-        return;
-    }
-
-    flatpak_remote_set_disabled(remote, !enabled);
-    if (!flatpak_installation_modify_remote(installation, remote, nullptr, &error)) {
-        qWarning() << "Could not modify remote" << name << ":" << (error ? error->message : "unknown error");
-        g_clear_error(&error);
-        return;
-    }
-    refreshRemotes();
+    runRemoteOperation(user, [name, enabled](FlatpakInstallation *installation) {
+        return setRemoteEnabledSync(installation, name, enabled);
+    });
 #else
     Q_UNUSED(name)
-    Q_UNUSED(user)
     Q_UNUSED(enabled)
+    runRemoteOperation(user, {});
 #endif
 }
 
@@ -1438,10 +1633,19 @@ void Backend::refreshLeftovers()
 
 void Backend::removeLeftover(const QString &path)
 {
-    if (path.isEmpty())
+    // Only paths the last scan reported can be deleted, never an arbitrary one.
+    const QString appId = m_leftovers->appIdForPath(path);
+    if (appId.isEmpty() || m_scanningLeftovers)
         return;
-    QDir(path).removeRecursively();
-    refreshLeftovers();
+
+    m_scanningLeftovers = true;
+    Q_EMIT leftoversChanged();
+    m_leftoverWatcher->setFuture(QtConcurrent::run([this, appId]() {
+        // Re-checks that the app is still not installed, then deletes off the
+        // UI thread (data directories can be gigabytes) and rescans.
+        removeAppDataIfUninstalled(m_flatpak, appId);
+        return scanLeftovers(m_flatpak);
+    }));
 }
 
 void Backend::checkForUpdates()
@@ -1449,15 +1653,10 @@ void Backend::checkForUpdates()
     if (m_transaction && m_transaction->running())
         return; // Don't disturb an in-flight transaction.
 
+    // The notification is sent from applyInstalledLists() once the
+    // asynchronous listing is in.
+    m_notifyAfterRefresh = true;
     refreshInstalled();
-
-    const int count = m_updates->rowCount();
-    if (count > 0 && count != m_lastNotifiedUpdates) {
-        m_lastNotifiedUpdates = count;
-        notifyUpdates(count);
-    } else if (count == 0) {
-        m_lastNotifiedUpdates = 0;
-    }
 }
 
 void Backend::notifyUpdates(int count)

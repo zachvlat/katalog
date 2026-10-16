@@ -42,6 +42,7 @@ void EntryModel::append(const EntryData &entry)
     beginInsertRows(QModelIndex(), m_entries.size(), m_entries.size());
     m_entries.append(entry);
     endInsertRows();
+    Q_EMIT countChanged();
 }
 
 void EntryModel::clear()
@@ -49,4 +50,13 @@ void EntryModel::clear()
     beginResetModel();
     m_entries.clear();
     endResetModel();
+    Q_EMIT countChanged();
+}
+
+void EntryModel::setEntries(const QList<EntryData> &entries)
+{
+    beginResetModel();
+    m_entries = entries;
+    endResetModel();
+    Q_EMIT countChanged();
 }

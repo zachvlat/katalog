@@ -66,11 +66,13 @@ Kirigami.ScrollablePage {
 
                         Button {
                             text: model.disabled ? qsTr("Enable") : qsTr("Disable")
+                            enabled: !backend.remoteBusy
                             onClicked: backend.setRemoteEnabled(model.name, model.isUser, model.disabled)
                         }
 
                         Button {
                             text: qsTr("Remove")
+                            enabled: !backend.remoteBusy
                             onClicked: backend.removeRemote(model.name, model.isUser)
                         }
                     }
@@ -104,7 +106,7 @@ Kirigami.ScrollablePage {
             }
             TextField {
                 id: newRemoteUrl
-                placeholderText: qsTr("e.g. https://dl.flathub.org/repo/")
+                placeholderText: qsTr("e.g. https://dl.flathub.org/repo/flathub.flatpakrepo")
                 Layout.fillWidth: true
             }
 
@@ -133,7 +135,7 @@ Kirigami.ScrollablePage {
                 text: qsTr("Add Flathub")
                 onClicked: {
                     newRemoteName.text = "flathub"
-                    newRemoteUrl.text = "https://dl.flathub.org/repo/"
+                    newRemoteUrl.text = "https://dl.flathub.org/repo/flathub.flatpakrepo"
                     newRemoteUser.checked = true
                 }
             }
@@ -142,20 +144,42 @@ Kirigami.ScrollablePage {
                 text: qsTr("Add Flathub Beta")
                 onClicked: {
                     newRemoteName.text = "flathub-beta"
-                    newRemoteUrl.text = "https://dl.flathub.org/beta-repo/"
+                    newRemoteUrl.text = "https://dl.flathub.org/beta-repo/flathub-beta.flatpakrepo"
                     newRemoteUser.checked = true
                 }
             }
 
             Button {
                 text: qsTr("Add remote")
-                enabled: newRemoteName.text.length > 0 && newRemoteUrl.text.length > 0
+                enabled: !backend.remoteBusy && newRemoteName.text.length > 0 && newRemoteUrl.text.length > 0
                 onClicked: {
                     backend.addRemote(newRemoteName.text.trim(), newRemoteUrl.text.trim(), newRemoteUser.checked)
                     newRemoteName.text = ""
                     newRemoteUrl.text = ""
                 }
             }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            visible: backend.remoteBusy
+            spacing: Kirigami.Units.smallSpacing
+            BusyIndicator {
+                running: backend.remoteBusy
+                Layout.preferredHeight: Kirigami.Units.iconSizes.medium
+                Layout.preferredWidth: Kirigami.Units.iconSizes.medium
+            }
+            Label {
+                text: qsTr("Updating repositories…")
+            }
+        }
+
+        Kirigami.InlineMessage {
+            Layout.fillWidth: true
+            visible: !backend.remoteBusy && backend.remoteMessage.length > 0
+            type: backend.remoteSucceeded ? Kirigami.MessageType.Positive
+                                                                  : Kirigami.MessageType.Error
+            text: backend.remoteMessage
         }
     }
 }

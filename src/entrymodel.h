@@ -29,8 +29,16 @@ struct ExploreResult {
     QList<EntryData> updated;
 };
 
+// The Installed and Updates lists, produced together by one worker pass.
+struct InstalledLists {
+    QList<EntryData> installed;
+    QList<EntryData> updates;
+};
+
 class EntryModel : public QAbstractListModel {
     Q_OBJECT
+    // Row count for QML bindings (C++ models have no built-in "count").
+    Q_PROPERTY(int count READ rowCount NOTIFY countChanged)
 public:
     enum Roles { AppIdRole = Qt::UserRole + 1, NameRole, SummaryRole, IconRole, InstalledRole };
 
@@ -42,6 +50,10 @@ public:
 
     void append(const EntryData &entry);
     void clear();
+    void setEntries(const QList<EntryData> &entries);
+
+Q_SIGNALS:
+    void countChanged();
 
 private:
     QList<EntryData> m_entries;

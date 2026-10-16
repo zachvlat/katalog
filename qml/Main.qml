@@ -406,9 +406,14 @@ Kirigami.ApplicationWindow {
             }
             Label {
                 anchors.centerIn: parent
-                visible: backend.installedApps.count === 0
+                visible: !backend.loadingInstalled && backend.installedApps.count === 0
                 text: qsTr("Nothing installed yet.")
                 opacity: 0.7
+            }
+            BusyIndicator {
+                anchors.centerIn: parent
+                running: backend.loadingInstalled && backend.installedApps.count === 0
+                visible: running
             }
         }
     }
@@ -428,10 +433,15 @@ Kirigami.ApplicationWindow {
             }
             Label {
                 anchors.centerIn: parent
-                visible: backend.updates.count === 0
+                visible: !backend.loadingInstalled && backend.updates.count === 0
                 text: qsTr("All quiet here…")
                 opacity: 0.7
                 font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.3
+            }
+            BusyIndicator {
+                anchors.centerIn: parent
+                running: backend.loadingInstalled && backend.updates.count === 0
+                visible: running
             }
         }
     }
@@ -496,16 +506,12 @@ Kirigami.ApplicationWindow {
 
     Component {
         id: repositoriesPage
-        Loader {
-            source: "qrc:/qt/qml/com/zachvlat/qutestore/qml/RepositoriesPage.qml"
-        }
+        RepositoriesPage {}
     }
 
     Component {
         id: leftoverPage
-        Loader {
-            source: "qrc:/qt/qml/com/zachvlat/qutestore/qml/LeftoverPage.qml"
-        }
+        LeftoverPage {}
     }
 
     pageStack.initialPage: explorePage
