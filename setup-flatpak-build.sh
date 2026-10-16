@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install everything needed to build com.zachvlat.qutestore.flatpak, then build it.
+# Install everything needed to build io.github.zachvlat.qutestore.flatpak, then build it.
 #
 #   ./setup-flatpak-build.sh               install dependencies and build the bundle
 #   ./setup-flatpak-build.sh --deps-only   only install dependencies
@@ -11,7 +11,7 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MANIFEST="${SCRIPT_DIR}/com.zachvlat.qutestore.json"
+MANIFEST="${SCRIPT_DIR}/io.github.zachvlat.qutestore.json"
 FLATHUB_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
 
 DEPS_ONLY=false

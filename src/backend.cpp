@@ -979,7 +979,7 @@ LeftoverScan scanLeftovers(FlatpakManager *manager)
     for (const QString &name : entries) {
         if (isExtensionRef(name) || !looksLikeAppId(name))
             continue;
-        if (installed.contains(name) || name == QLatin1String("com.zachvlat.qutestore"))
+        if (installed.contains(name) || name == QLatin1String("io.github.zachvlat.qutestore"))
             continue;
 
         LeftoverData data;
@@ -1406,16 +1406,35 @@ void Backend::openApp(const QString &appId)
 
 void Backend::installApp(const QString &appId)
 {
+    m_updateQueue.clear();
     startTransaction(Transaction::Install, appId);
 }
 
 void Backend::updateApp(const QString &appId)
 {
+    m_updateQueue.clear();
     startTransaction(Transaction::Update, appId);
+}
+
+void Backend::updateAll()
+{
+    if (m_transaction && m_transaction->running())
+        return; // An operation is already in flight.
+
+    QStringList pending;
+    const QList<EntryData> &rows = m_updates->entries();
+    for (const EntryData &entry : rows)
+        pending << entry.appId;
+    if (pending.isEmpty())
+        return;
+
+    m_updateQueue = pending;
+    startNextQueuedUpdate();
 }
 
 void Backend::removeApp(const QString &appId, bool deleteData)
 {
+    m_updateQueue.clear();
     startTransaction(Transaction::Remove, appId, deleteData);
 }
 
@@ -1475,7 +1494,26 @@ void Backend::startTransaction(int kind, const QString &appId, bool deleteData)
             Q_EMIT currentTransactionChanged();
     });
 
+    // "Update all" runs the queued updates one after the next. The chain stops
+    // at the first failure so the error stays on screen instead of being
+    // quietly followed by more operations.
+    connect(transaction, &Transaction::finishedChanged, this, [this, transaction]() {
+        if (m_updateQueue.isEmpty())
+            return;
+        if (transaction->success())
+            startNextQueuedUpdate();
+        else
+            m_updateQueue.clear();
+    });
+
     transaction->start();
+}
+
+void Backend::startNextQueuedUpdate()
+{
+    if (m_updateQueue.isEmpty() || (m_transaction && m_transaction->running()))
+        return;
+    startTransaction(Transaction::Update, m_updateQueue.takeFirst());
 }
 
 void Backend::refreshRemotes()
@@ -1779,7 +1817,7 @@ void Backend::notifyUpdates(int count)
     KNotification::event(KNotification::Notification,
                          tr("Updates available"),
                          tr("%n application(s) can be updated.", "", count),
-                         QStringLiteral("com.zachvlat.qutestore"),
+                         QStringLiteral("io.github.zachvlat.qutestore"),
                          KNotification::CloseOnTimeout);
 #else
     Q_UNUSED(count)

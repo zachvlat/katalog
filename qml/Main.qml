@@ -160,7 +160,7 @@ Kirigami.ApplicationWindow {
             },
             SidebarRow {
                 text: qsTr("Installed")
-                iconName: "system-software-installed"
+                iconName: "system-software-install"
                 onClicked: window.navigateTo(installedPage)
             },
             SidebarRow {
@@ -442,6 +442,20 @@ Kirigami.ApplicationWindow {
         Kirigami.Page {
             title: qsTr("Updates")
             Component.onCompleted: backend.refreshInstalled()
+
+            // Update every pending app in one go; the updates run one
+            // transaction after the next (see Backend::updateAll).
+            actions: [
+                Kirigami.Action {
+                    text: qsTr("Update All")
+                    icon.name: "download"
+                    enabled: backend.updates.count > 0
+                             && (!backend.currentTransaction
+                                 || !backend.currentTransaction.running)
+                    onTriggered: backend.updateAll()
+                }
+            ]
+
             GridView {
                 anchors.fill: parent
                 clip: true

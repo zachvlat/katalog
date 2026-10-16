@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.zachvlat.qutestore</id>
+  <name>Qute Store</name>
+  <summary>Native KDE/Qt Flatpak store</summary>
+  <developer id="io.github.zachvlat">
+    <name>Zacharias Vlatakis</name>
+  </developer>
+  <description>
+    <p>A native KDE/Qt (Kirigami) Flatpak store to browse, install, update and
+    remove applications, based on Bazaar's implementation.</p>
+  </description>
+  <launchable type="desktop-id">io.github.zachvlat.qutestore.desktop</launchable>
+  <url type="homepage">https://github.com/zachvlat/qutestore</url>
+  <url type="bugtracker">https://github.com/zachvlat/qutestore/issues</url>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <categories>
+    <category>System</category>
+    <category>PackageManager</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/zachvlat/qutestore/main/metadata/screenshots/1.png</image>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/zachvlat/qutestore/main/metadata/screenshots/2.png</image>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/zachvlat/qutestore/main/metadata/screenshots/3.png</image>
+    </screenshot>
+  </screenshots>
+  <releases>
+    <release version="1.0.1" date="2026-10-16">
+      <description>
+        <p>Fixes and UI improvements.</p>
+      </description>
+    </release>
+    <release version="1.0.0" date="2026-10-14">
+      <description>
+        <p>First release: Explore, Search, Installed and Updates pages, app details,
+        and install/update/remove/launch transactions.</p>
+      </description>
+    </release>
+  </releases>
+</component>

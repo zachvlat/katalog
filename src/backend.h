@@ -2,6 +2,7 @@
 
 #include <QFutureWatcher>
 #include <QObject>
+#include <QStringList>
 #include <QTimer>
 
 #include <functional>
@@ -70,6 +71,8 @@ public:
     Q_INVOKABLE void openApp(const QString &appId);
     Q_INVOKABLE void installApp(const QString &appId);
     Q_INVOKABLE void updateApp(const QString &appId);
+    // Update every app that has one available, one transaction after the next.
+    Q_INVOKABLE void updateAll();
     // deleteData also removes ~/.var/app/<appId> once the app is gone.
     Q_INVOKABLE void removeApp(const QString &appId, bool deleteData = false);
     Q_INVOKABLE void launchApp(const QString &appId);
@@ -100,6 +103,7 @@ Q_SIGNALS:
 
 private:
     void startTransaction(int kind, const QString &appId, bool deleteData = false);
+    void startNextQueuedUpdate();
     bool beginRemoteOperation();
     void runRemoteOperation(bool user, std::function<RemoteOpResult(FlatpakInstallation *)> operation);
     void finishRemoteOperation(const RemoteOpResult &result);
@@ -130,6 +134,7 @@ private:
     bool m_categoryLoading = false;
 
     QTimer *m_updateTimer = nullptr;
+    QStringList m_updateQueue;
     int m_lastNotifiedUpdates = -1;
     bool m_loadingInstalled = false;
     bool m_installedRefreshQueued = false;

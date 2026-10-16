@@ -52,6 +52,10 @@ public:
     void clear();
     void setEntries(const QList<EntryData> &entries);
 
+    // Read-only access to the rows themselves, for code that has to walk them
+    // (e.g. the backend's "update all" queue).
+    const QList<EntryData> &entries() const { return m_entries; }
+
 Q_SIGNALS:
     void countChanged();
 

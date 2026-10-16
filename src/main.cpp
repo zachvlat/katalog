@@ -8,9 +8,10 @@ int main(int argc, char *argv[])
 {
     QGuiApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("QuteStore"));
-    app.setOrganizationName(QStringLiteral("com.zachvlat"));
+    app.setOrganizationName(QStringLiteral("io.github.zachvlat"));
     app.setApplicationDisplayName(QStringLiteral("Qute Store"));
-    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("com.zachvlat.qutestore")));
+    app.setDesktopFileName(QStringLiteral("io.github.zachvlat.qutestore"));
+    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("io.github.zachvlat.qutestore")));
 
     QQmlApplicationEngine engine;
     Backend backend;

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build a Flatpak bundle for com.zachvlat.qutestore
+# Build a Flatpak bundle for io.github.zachvlat.qutestore
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MANIFEST="${SCRIPT_DIR}/com.zachvlat.qutestore.json"
-OUTPUT="${SCRIPT_DIR}/com.zachvlat.qutestore.flatpak"
+MANIFEST="${SCRIPT_DIR}/io.github.zachvlat.qutestore.json"
+OUTPUT="${SCRIPT_DIR}/io.github.zachvlat.qutestore.flatpak"
 REPO="${SCRIPT_DIR}/.flatpak-builder/repo"
 BUILD_DIR="${SCRIPT_DIR}/.flatpak-builder/build"
 STATE_DIR="${SCRIPT_DIR}/.flatpak-builder/state"
@@ -168,7 +168,7 @@ echo
 
 echo
 echo "Exporting bundle..."
-flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo "$REPO" "$OUTPUT" com.zachvlat.qutestore
+flatpak build-bundle --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo "$REPO" "$OUTPUT" io.github.zachvlat.qutestore
 
 echo "Bundle: $OUTPUT"
 
@@ -176,6 +176,6 @@ if [[ "$INSTALL" == true ]]; then
   flatpak install --user -y "$OUTPUT"
 fi
 if [[ "$RUN" == true ]]; then
-  flatpak run com.zachvlat.qutestore
+  flatpak run io.github.zachvlat.qutestore
 fi
 

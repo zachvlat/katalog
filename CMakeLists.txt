@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(qutestore VERSION 1.0.0 LANGUAGES CXX)
+project(qutestore VERSION 1.0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -108,7 +108,7 @@ if(GIO_LIBRARY)
 endif()
 
 qt_add_qml_module(qutestore
-    URI com.zachvlat.qutestore
+    URI io.github.zachvlat.qutestore
     VERSION 1.0
     SOURCES
         src/flathubclient.cpp
@@ -135,14 +135,14 @@ target_link_libraries(qutestore PRIVATE
 )
 
 install(TARGETS qutestore RUNTIME DESTINATION bin)
-install(FILES data/com.zachvlat.qutestore.desktop DESTINATION share/applications)
-install(FILES data/com.zachvlat.qutestore.metainfo.xml DESTINATION share/metainfo)
+install(FILES data/io.github.zachvlat.qutestore.desktop DESTINATION share/applications)
+install(FILES data/io.github.zachvlat.qutestore.metainfo.xml DESTINATION share/metainfo)
 
 # App icon, named after the app id, as both a scalable SVG and the raster
 # sizes the icon theme and software centres look for.
-install(FILES data/icons/hicolor/scalable/apps/com.zachvlat.qutestore.svg
+install(FILES data/icons/hicolor/scalable/apps/io.github.zachvlat.qutestore.svg
         DESTINATION share/icons/hicolor/scalable/apps)
 foreach(_size 64 128 256 512)
-    install(FILES data/icons/hicolor/${_size}x${_size}/apps/com.zachvlat.qutestore.png
+    install(FILES data/icons/hicolor/${_size}x${_size}/apps/io.github.zachvlat.qutestore.png
             DESTINATION share/icons/hicolor/${_size}x${_size}/apps)
 endforeach()

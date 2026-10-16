@@ -1,5 +1,5 @@
 {
-  "app-id": "com.zachvlat.qutestore",
+  "app-id": "io.github.zachvlat.qutestore",
   "runtime": "org.kde.Platform",
   "runtime-version": "6.11",
   "sdk": "org.kde.Sdk",
@@ -275,7 +275,7 @@
           "skip": [
             ".flatpak-builder",
             "build",
-            "com.zachvlat.qutestore.flatpak"
+            "io.github.zachvlat.qutestore.flatpak"
           ]
         }
       ]
