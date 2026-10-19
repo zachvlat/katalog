@@ -8,8 +8,10 @@
 /*.flatpakrepo
 
 # --- Local (host) CMake build --------------------------------------------
-# Only the canonical build/ dir is ignored; build-aux/ is source.
+# The canonical build/ dir and the host dev build-dev/ are ignored;
+# build-aux/ is source.
 /build/
+/build-dev/
 
 # CMake/Ninja leftovers, in case a build is configured elsewhere.
 CMakeCache.txt

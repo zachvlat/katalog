@@ -2,6 +2,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QString>
 
 #include "entrymodel.h"
@@ -28,16 +29,31 @@ public:
     // collection and allFinished() after the last reply (success or failure).
     void fetchExplore();
 
+    // Fetch the ids of every app verified by Flathub. The collection is
+    // paginated, so this walks all pages and emits verifiedAppsReady() once the
+    // whole set is in. The set is cached for the rest of the session.
+    void fetchVerifiedApps();
+    const QSet<QString> &verifiedAppIds() const { return m_verifiedAppIds; }
+
     QList<EntryData> collection(const QString &key) const { return m_collections.value(key); }
 
 Q_SIGNALS:
     void collectionReady(const QString &key, const QList<EntryData> &entries);
     void allFinished();
+    void verifiedAppsReady();
 
 private:
     void handleReply(const QString &key, QNetworkReply *reply);
+    void requestVerifiedPage(int page);
+    void handleVerifiedPage(int page, QNetworkReply *reply);
+    void finishVerifiedApps();
 
     QNetworkAccessManager *m_nam = nullptr;
     QHash<QString, QList<EntryData>> m_collections;
     int m_pending = 0;
+
+    QSet<QString> m_verifiedAppIds;
+    int m_verifiedPagesPending = 0;
+    bool m_verifiedLoading = false;
+    bool m_verifiedLoaded = false;
 };

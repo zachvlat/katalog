@@ -20,6 +20,10 @@ namespace {
 // only need enough for a horizontal strip.
 constexpr int kRowLimit = 24;
 
+// The verified collection is paginated by Meilisearch; this is the largest page
+// size the API accepts.
+constexpr int kVerifiedPageSize = 250;
+
 struct CollectionDef {
     const char *key;
     const char *path; // appended to the API base URL
@@ -59,6 +63,7 @@ QList<EntryData> parseCollection(const QByteArray &data)
             entry.name = appId;
         entry.summary = object.value(QStringLiteral("summary")).toString();
         entry.icon = object.value(QStringLiteral("icon")).toString();
+        entry.verified = object.value(QStringLiteral("verification_verified")).toBool();
         entries.append(entry);
     }
     return entries;
@@ -92,6 +97,85 @@ void FlathubClient::fetchExplore()
 
     if (m_pending == 0)
         Q_EMIT allFinished();
+}
+
+void FlathubClient::fetchVerifiedApps()
+{
+    if (m_verifiedLoading || m_verifiedLoaded)
+        return;
+
+    m_verifiedLoading = true;
+    m_verifiedAppIds.clear();
+    m_verifiedPagesPending = 0;
+    requestVerifiedPage(1);
+}
+
+void FlathubClient::requestVerifiedPage(int page)
+{
+    QNetworkRequest request(
+        QUrl(QStringLiteral("https://flathub.org/api/v2/collection/verified?page=%1&per_page=%2")
+                 .arg(page)
+                 .arg(kVerifiedPageSize)));
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setTransferTimeout(15000);
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("QuteStore/1.0"));
+
+    QNetworkReply *reply = m_nam->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, page, reply]() { handleVerifiedPage(page, reply); });
+}
+
+void FlathubClient::handleVerifiedPage(int page, QNetworkReply *reply)
+{
+    reply->deleteLater();
+
+    QJsonDocument doc;
+    if (reply->error() == QNetworkReply::NoError) {
+        QJsonParseError parseError{};
+        doc = QJsonDocument::fromJson(reply->readAll(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+            qWarning() << "Flathub: could not parse verified apps:" << parseError.errorString();
+            doc = QJsonDocument();
+        }
+    } else {
+        qWarning() << "Flathub: request for verified apps failed:" << reply->errorString();
+    }
+
+    if (doc.isObject()) {
+        const QJsonArray hits = doc.object().value(QStringLiteral("hits")).toArray();
+        for (const QJsonValue &value : hits) {
+            const QJsonObject object = value.toObject();
+            const QString appId = object.value(QStringLiteral("app_id")).toString();
+            if (!appId.isEmpty() && object.value(QStringLiteral("verification_verified")).toBool())
+                m_verifiedAppIds.insert(appId);
+        }
+
+        if (page == 1) {
+            const int totalPages = doc.object().value(QStringLiteral("totalPages")).toInt();
+            m_verifiedPagesPending = qMax(0, totalPages - 1);
+            if (m_verifiedPagesPending == 0) {
+                finishVerifiedApps();
+                return;
+            }
+            for (int next = 2; next <= totalPages; ++next)
+                requestVerifiedPage(next);
+            return;
+        }
+    } else if (page == 1) {
+        // Nothing usable at all; allow a later retry.
+        m_verifiedLoading = false;
+        Q_EMIT verifiedAppsReady();
+        return;
+    }
+
+    if (--m_verifiedPagesPending <= 0)
+        finishVerifiedApps();
+}
+
+void FlathubClient::finishVerifiedApps()
+{
+    m_verifiedLoading = false;
+    m_verifiedLoaded = true;
+    Q_EMIT verifiedAppsReady();
 }
 
 void FlathubClient::handleReply(const QString &key, QNetworkReply *reply)

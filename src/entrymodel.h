@@ -2,6 +2,7 @@
 
 #include <QAbstractListModel>
 #include <QList>
+#include <QSet>
 #include <QString>
 
 struct EntryData {
@@ -10,6 +11,7 @@ struct EntryData {
     QString summary;
     QString icon;
     bool installed = false;
+    bool verified = false;
 };
 
 // A titled group of entries, as shown on the Explore page.
@@ -40,7 +42,7 @@ class EntryModel : public QAbstractListModel {
     // Row count for QML bindings (C++ models have no built-in "count").
     Q_PROPERTY(int count READ rowCount NOTIFY countChanged)
 public:
-    enum Roles { AppIdRole = Qt::UserRole + 1, NameRole, SummaryRole, IconRole, InstalledRole };
+    enum Roles { AppIdRole = Qt::UserRole + 1, NameRole, SummaryRole, IconRole, InstalledRole, VerifiedRole };
 
     explicit EntryModel(QObject *parent = nullptr);
 
@@ -51,6 +53,10 @@ public:
     void append(const EntryData &entry);
     void clear();
     void setEntries(const QList<EntryData> &entries);
+
+    // Updates the verified flag of the rows whose app id is in the set. Used
+    // when the Flathub verification list arrives after the rows were built.
+    void setVerifiedIds(const QSet<QString> &ids);
 
     // Read-only access to the rows themselves, for code that has to walk them
     // (e.g. the backend's "update all" queue).

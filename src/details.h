@@ -49,6 +49,7 @@ struct AppDetailData {
 
     bool installed = false;
     bool updateAvailable = false;
+    bool verified = false;
 
     // Internal: used to discard stale asynchronous loads. Not exposed in QML.
     quint64 generation = 0;
@@ -81,6 +82,7 @@ class Details : public QObject {
     Q_PROPERTY(QVariantList releases READ releases NOTIFY changed)
     Q_PROPERTY(bool installed READ installed NOTIFY changed)
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY changed)
+    Q_PROPERTY(bool verified READ verified NOTIFY changed)
 public:
     explicit Details(QObject *parent = nullptr);
 
@@ -109,8 +111,10 @@ public:
     QVariantList releases() const;
     bool installed() const { return m_data.installed; }
     bool updateAvailable() const { return m_data.updateAvailable; }
+    bool verified() const { return m_data.verified; }
 
     void setLoading(bool loading);
+    void setVerified(bool verified);
     void reset(const QString &appId);
     void apply(const AppDetailData &data);
 

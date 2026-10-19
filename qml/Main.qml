@@ -160,7 +160,7 @@ Kirigami.ApplicationWindow {
             },
             SidebarRow {
                 text: qsTr("Installed")
-                iconName: "system-software-install"
+                iconName: "package-symbolic"
                 onClicked: window.navigateTo(installedPage)
             },
             SidebarRow {
@@ -203,6 +203,11 @@ Kirigami.ApplicationWindow {
                     iconName: modelData.icon ? modelData.icon : ""
                     onClicked: window.openCategory(modelData.title, modelData.category)
                 }
+            },
+            SidebarRow {
+                text: qsTr("KDE apps")
+                iconName: "kde-symbolic"
+                onClicked: window.openCategory(qsTr("KDE apps"), "kde")
             }
         ]
     }
@@ -261,12 +266,20 @@ Kirigami.ApplicationWindow {
                     Layout.alignment: Qt.AlignVCenter
                     spacing: Kirigami.Units.smallSpacing
 
-                    Label {
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: model.name ? model.name : model.appId
-                        font.bold: true
-                        elide: Text.ElideRight
-                        maximumLineCount: 1
+                        spacing: Kirigami.Units.smallSpacing
+                        Label {
+                            Layout.fillWidth: true
+                            text: model.name ? model.name : model.appId
+                            font.bold: true
+                            elide: Text.ElideRight
+                            maximumLineCount: 1
+                        }
+                        VerifiedBadge {
+                            visible: model.verified
+                            Layout.alignment: Qt.AlignVCenter
+                        }
                     }
                     Label {
                         Layout.fillWidth: true

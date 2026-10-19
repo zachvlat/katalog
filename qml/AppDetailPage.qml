@@ -97,11 +97,24 @@ Kirigami.Page {
                     Layout.fillWidth: true
                     spacing: Kirigami.Units.smallSpacing
 
-                    Kirigami.Heading {
+                    RowLayout {
                         Layout.fillWidth: true
-                        level: 1
-                        wrapMode: Text.WordWrap
-                        text: page.app ? page.app.name : ""
+                        spacing: Kirigami.Units.smallSpacing
+                        Kirigami.Heading {
+                            id: appTitle
+                            level: 1
+                            wrapMode: Text.WordWrap
+                            text: page.app ? page.app.name : ""
+                            Layout.fillWidth: true
+                            // Grow (and wrap) for long titles, but never past the
+                            // text's natural width so the badge stays next to it.
+                            Layout.maximumWidth: implicitWidth
+                        }
+                        VerifiedBadge {
+                            id: verifiedBadge
+                            visible: page.app && page.app.verified
+                            Layout.alignment: Qt.AlignVCenter
+                        }
                     }
                     Label {
                         Layout.fillWidth: true

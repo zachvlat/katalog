@@ -589,6 +589,59 @@ QList<EntryData> appStreamCategory(FlatpakManager *manager, const QString &categ
     return results;
 }
 
+// The "KDE apps" pseudo-category. AppStream has no such category, so collect
+// the desktop apps that belong to KDE: by the org.kde.* id namespace, or by
+// KDE being the declared developer (catches apps published outside org.kde.*).
+QList<EntryData> appStreamKdeApps(FlatpakManager *manager)
+{
+    QList<EntryData> results;
+
+    AsPool *pool = as_pool_new();
+    configureAppStreamPool(pool, manager);
+
+    GError *error = nullptr;
+    if (!as_pool_load(pool, nullptr, &error)) {
+        qWarning() << "AppStream: failed to load pool:" << (error ? error->message : "unknown error");
+        g_clear_error(&error);
+        g_object_unref(pool);
+        return results;
+    }
+
+    AsComponentBox *all = as_pool_get_components(pool);
+    if (all) {
+        QSet<QString> seen;
+        const guint count = as_component_box_len(all);
+        for (guint i = 0; i < count; ++i) {
+            AsComponent *component = as_component_box_index(all, i);
+            if (as_component_get_kind(component) != AS_COMPONENT_KIND_DESKTOP_APP)
+                continue;
+            const gchar *id = as_component_get_id(component);
+            if (!id)
+                continue;
+            const QString appId = QString::fromUtf8(id);
+            if (seen.contains(appId))
+                continue;
+
+            bool isKde = appId.startsWith(QLatin1String("org.kde."));
+            if (!isKde) {
+                if (AsDeveloper *developer = as_component_get_developer(component)) {
+                    if (const gchar *name = as_developer_get_name(developer))
+                        isKde = QString::fromUtf8(name).compare(QLatin1String("KDE"), Qt::CaseInsensitive) == 0;
+                }
+            }
+            if (!isKde)
+                continue;
+
+            seen.insert(appId);
+            results.append(entryFromComponent(component));
+        }
+        g_object_unref(all);
+    }
+
+    g_object_unref(pool);
+    return results;
+}
+
 } // namespace
 #endif
 
@@ -1038,17 +1091,24 @@ Backend::Backend(QObject *parent)
         const QList<EntryData> results = m_watcher->result();
         if (generation != m_searchGeneration)
             return; // A newer search superseded this one.
-        for (const EntryData &entry : results)
-            m_search->append(entry);
+        const QSet<QString> verified = m_flathub->verifiedAppIds();
+        for (const EntryData &entry : results) {
+            EntryData row = entry;
+            row.verified = verified.contains(row.appId);
+            m_search->append(row);
+        }
         m_searching = false;
         Q_EMIT searchingChanged();
     });
 
     m_detailsWatcher = new QFutureWatcher<AppDetailData>(this);
     connect(m_detailsWatcher, &QFutureWatcher<AppDetailData>::finished, this, [this]() {
-        const AppDetailData data = m_detailsWatcher->result();
+        AppDetailData data = m_detailsWatcher->result();
         if (data.generation != m_detailsGeneration)
             return; // A newer request superseded this one.
+        const QSet<QString> verified = m_flathub->verifiedAppIds();
+        data.verified = verified.contains(data.appId)
+            || verified.contains(flatpakIdForComponentId(data.appId));
         m_details->apply(data);
     });
 
@@ -1065,6 +1125,11 @@ Backend::Backend(QObject *parent)
     });
 
     connect(m_flathub, &FlathubClient::allFinished, this, [this]() { explorePartDone(); });
+    connect(m_flathub, &FlathubClient::verifiedAppsReady, this, &Backend::applyVerifiedApps);
+
+    // The verification list applies to every view (not just Explore), so fetch
+    // it once at startup and cache it in FlathubClient.
+    m_flathub->fetchVerifiedApps();
 
     m_categoryWatcher = new QFutureWatcher<QList<EntryData>>(this);
     connect(m_categoryWatcher, &QFutureWatcher<QList<EntryData>>::finished, this, [this]() {
@@ -1072,8 +1137,12 @@ Backend::Backend(QObject *parent)
         const QList<EntryData> results = m_categoryWatcher->result();
         if (generation != m_categoryGeneration)
             return; // A newer category superseded this one.
-        for (const EntryData &entry : results)
-            m_category->append(entry);
+        const QSet<QString> verified = m_flathub->verifiedAppIds();
+        for (const EntryData &entry : results) {
+            EntryData row = entry;
+            row.verified = verified.contains(row.appId);
+            m_category->append(row);
+        }
         m_categoryLoading = false;
         Q_EMIT categoryChanged();
     });
@@ -1259,8 +1328,15 @@ void Backend::applyInstalledLists(const InstalledLists &lists)
 {
     // Replace the rows in one step so an open Installed/Updates page never
     // flashes empty.
-    m_installed->setEntries(lists.installed);
-    m_updates->setEntries(lists.updates);
+    const QSet<QString> verified = m_flathub->verifiedAppIds();
+    QList<EntryData> installed = lists.installed;
+    for (EntryData &entry : installed)
+        entry.verified = verified.contains(entry.appId);
+    QList<EntryData> updates = lists.updates;
+    for (EntryData &entry : updates)
+        entry.verified = verified.contains(entry.appId);
+    m_installed->setEntries(installed);
+    m_updates->setEntries(updates);
     m_loadingInstalled = false;
     Q_EMIT installedChanged();
 
@@ -1320,6 +1396,8 @@ void Backend::buildExplore()
     m_exploreCurated.clear();
     m_exploreSections.clear();
 
+    const QSet<QString> verified = m_flathub->verifiedAppIds();
+
     // Curated rows, in the requested order. Each falls back to the AppStream
     // release-date list when the Flathub API row is unavailable (offline).
     struct RowDef {
@@ -1347,8 +1425,11 @@ void Backend::buildExplore()
             continue;
 
         auto *model = new EntryModel(this);
-        for (const EntryData &entry : entries)
-            model->append(entry);
+        for (const EntryData &entry : entries) {
+            EntryData marked = entry;
+            marked.verified = marked.verified || verified.contains(marked.appId);
+            model->append(marked);
+        }
         m_exploreModels.append(model);
 
         QVariantMap map;
@@ -1361,8 +1442,11 @@ void Backend::buildExplore()
 
     for (const ExploreSectionData &section : m_exploreCategories) {
         auto *model = new EntryModel(this);
-        for (const EntryData &entry : section.entries)
-            model->append(entry);
+        for (const EntryData &entry : section.entries) {
+            EntryData marked = entry;
+            marked.verified = marked.verified || verified.contains(marked.appId);
+            model->append(marked);
+        }
         m_exploreModels.append(model);
 
         QVariantMap map;
@@ -1377,6 +1461,22 @@ void Backend::buildExplore()
     Q_EMIT exploreChanged();
 }
 
+void Backend::applyVerifiedApps()
+{
+    const QSet<QString> &ids = m_flathub->verifiedAppIds();
+    m_search->setVerifiedIds(ids);
+    m_installed->setVerifiedIds(ids);
+    m_updates->setVerifiedIds(ids);
+    m_category->setVerifiedIds(ids);
+    for (EntryModel *model : m_exploreModels)
+        model->setVerifiedIds(ids);
+
+    if (m_details && !m_details->appId().isEmpty()) {
+        const QString appId = m_details->appId();
+        m_details->setVerified(ids.contains(appId) || ids.contains(flatpakIdForComponentId(appId)));
+    }
+}
+
 void Backend::loadCategory(const QString &category)
 {
     m_category->clear();
@@ -1385,8 +1485,12 @@ void Backend::loadCategory(const QString &category)
     Q_EMIT categoryChanged();
 
 #ifdef HAVE_APPSTREAM
-    m_categoryWatcher->setFuture(
-        QtConcurrent::run([this, category, generation]() { return appStreamCategory(m_flatpak, category); }));
+    if (category == QLatin1String("kde")) {
+        m_categoryWatcher->setFuture(QtConcurrent::run([this]() { return appStreamKdeApps(m_flatpak); }));
+    } else {
+        m_categoryWatcher->setFuture(
+            QtConcurrent::run([this, category, generation]() { return appStreamCategory(m_flatpak, category); }));
+    }
 #else
     Q_UNUSED(category)
     Q_UNUSED(generation)

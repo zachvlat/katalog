@@ -52,3 +52,11 @@ void Details::apply(const AppDetailData &data)
     m_loading = false;
     Q_EMIT changed();
 }
+
+void Details::setVerified(bool verified)
+{
+    if (m_data.verified == verified)
+        return;
+    m_data.verified = verified;
+    Q_EMIT changed();
+}

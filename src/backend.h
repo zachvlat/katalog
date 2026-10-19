@@ -111,6 +111,7 @@ private:
     void buildExplore();
     void notifyUpdates(int count);
     void applyInstalledLists(const InstalledLists &lists);
+    void applyVerifiedApps();
 
     FlatpakManager *m_flatpak = nullptr;
     EntryModel *m_search = nullptr;

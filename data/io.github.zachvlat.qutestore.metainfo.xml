@@ -32,6 +32,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.0.2" date="2026-10-19">
+      <description>
+        <p>Show Flathub "Verified" badges on app cards and details, add a KDE
+        apps category, and assorted UI improvements.</p>
+      </description>
+    </release>
     <release version="1.0.1" date="2026-10-16">
       <description>
         <p>Fixes and UI improvements.</p>
