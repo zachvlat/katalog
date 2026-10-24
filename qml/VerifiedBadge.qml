@@ -1,9 +1,6 @@
 import QtQuick
 import org.kde.kirigami as Kirigami
 
-// Flathub-style verification badge: a small filled circle with the Breeze
-// checkbox glyph (a tick) scaled down and centred inside it. Purely
-// informational, so it does not react to clicks.
 Item {
     id: badge
 

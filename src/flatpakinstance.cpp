@@ -9,8 +9,6 @@
 #ifdef HAVE_FLATPAK
 namespace {
 
-// Locations that commonly hold the real Flatpak installation when the app runs
-// inside a container (e.g. distrobox), where /var/lib/flatpak is not mounted.
 const char *const kHostSystemDirs[] = {
     "/run/host/var/lib/flatpak",
     nullptr,
@@ -29,8 +27,6 @@ bool hasRemotes(FlatpakInstallation *installation)
     return remotes && remotes->len > 0;
 }
 
-// If the default system installation is empty (container case), fall back to a
-// host path that contains a usable installation.
 FlatpakInstallation *detectSystemInstallation()
 {
     GError *error = nullptr;
@@ -67,7 +63,7 @@ FlatpakInstallation *detectSystemInstallation()
     return installation;
 }
 
-} // namespace
+}
 #endif
 
 FlatpakManager::FlatpakManager(QObject *parent)

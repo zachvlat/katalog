@@ -12,10 +12,11 @@ struct EntryData {
     QString icon;
     bool installed = false;
     bool verified = false;
-    int kind = 0; // 0 = app, 1 = runtime, 2 = other/extension
+    int kind = 0;
+    QString ref;
+    bool userInstallation = false;
 };
 
-// A titled group of entries, as shown on the Explore page.
 struct ExploreSectionData {
     QString title;
     QString category;
@@ -23,16 +24,12 @@ struct ExploreSectionData {
     QList<EntryData> entries;
 };
 
-// Everything the Explore page needs from a single (AppStream) worker pass. The
-// curated Flathub API rows are fetched separately over the network; the two
-// "recent" lists are the offline fallback derived from AppStream release dates.
 struct ExploreResult {
     QList<ExploreSectionData> categories;
     QList<EntryData> newest;
     QList<EntryData> updated;
 };
 
-// The Installed and Updates lists, produced together by one worker pass.
 struct InstalledLists {
     QList<EntryData> installed;
     QList<EntryData> updates;
@@ -40,10 +37,10 @@ struct InstalledLists {
 
 class EntryModel : public QAbstractListModel {
     Q_OBJECT
-    // Row count for QML bindings (C++ models have no built-in "count").
     Q_PROPERTY(int count READ rowCount NOTIFY countChanged)
 public:
-    enum Roles { AppIdRole = Qt::UserRole + 1, NameRole, SummaryRole, IconRole, InstalledRole, VerifiedRole, KindRole };
+    enum Roles { AppIdRole = Qt::UserRole + 1, NameRole, SummaryRole, IconRole, InstalledRole, VerifiedRole, KindRole, RefRole,
+                 UserInstallationRole };
 
     explicit EntryModel(QObject *parent = nullptr);
 
@@ -55,12 +52,8 @@ public:
     void clear();
     void setEntries(const QList<EntryData> &entries);
 
-    // Updates the verified flag of the rows whose app id is in the set. Used
-    // when the Flathub verification list arrives after the rows were built.
     void setVerifiedIds(const QSet<QString> &ids);
 
-    // Read-only access to the rows themselves, for code that has to walk them
-    // (e.g. the backend's "update all" queue).
     const QList<EntryData> &entries() const { return m_entries; }
 
 Q_SIGNALS:

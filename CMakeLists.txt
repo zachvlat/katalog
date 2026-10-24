@@ -6,10 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Concurrent Network)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Qml Quick QuickControls2 Concurrent Network)
 find_package(KF6Kirigami2 6.0 QUIET)
 find_package(KF6I18n 6.0 QUIET)
 find_package(KF6Notifications 6.0 QUIET)
+find_package(KF6IconThemes 6.3 QUIET)
+find_package(KF6ColorScheme 6.6 QUIET)
 
 if (NOT KF6Notifications_FOUND)
     find_package(KF6Notifications5 QUIET)
@@ -27,10 +29,6 @@ qt_add_executable(qutestore
     src/leftovermodel.cpp
 )
 
-# Optional Flatpak/AppStream support. On the host these come from the system;
-# inside the Flatpak bundle libflatpak is built into the app prefix (/app) while
-# AppStream and GLib are provided by the runtime. The search hints below cover
-# both layouts (including Debian-style multiarch directories).
 set(_qs_arch "${CMAKE_LIBRARY_ARCHITECTURE}")
 set(_qs_include_hints
     /app/include
@@ -100,6 +98,14 @@ if(KF6Notifications_FOUND OR KF6NOTIFICATIONS_FOUND OR KF6Notifications5_FOUND)
     target_link_libraries(qutestore PRIVATE KF6::Notifications)
     target_compile_definitions(qutestore PRIVATE HAVE_KNOTIFICATIONS)
 endif()
+if(KF6IconThemes_FOUND)
+    target_link_libraries(qutestore PRIVATE KF6::IconThemes)
+    target_compile_definitions(qutestore PRIVATE HAVE_KICONTHEMES)
+endif()
+if(KF6ColorScheme_FOUND)
+    target_link_libraries(qutestore PRIVATE KF6::ColorScheme)
+    target_compile_definitions(qutestore PRIVATE HAVE_KCOLORSCHEME)
+endif()
 if(GOBJECT_LIBRARY)
     target_link_libraries(qutestore PRIVATE ${GOBJECT_LIBRARY})
 endif()
@@ -121,6 +127,7 @@ qt_add_qml_module(qutestore
         qml/LeftoverPage.qml
         qml/VerifiedBadge.qml
         qml/InstalledPage.qml
+        qml/SettingsPage.qml
     NO_RESOURCE_TARGET_PATH
 )
 
@@ -129,6 +136,7 @@ target_include_directories(qutestore PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(qutestore PRIVATE
     Qt6::Core
     Qt6::Gui
+    Qt6::Widgets
     Qt6::Qml
     Qt6::Quick
     Qt6::QuickControls2
@@ -140,8 +148,6 @@ install(TARGETS qutestore RUNTIME DESTINATION bin)
 install(FILES data/io.github.zachvlat.qutestore.desktop DESTINATION share/applications)
 install(FILES data/io.github.zachvlat.qutestore.metainfo.xml DESTINATION share/metainfo)
 
-# App icon, named after the app id, as both a scalable SVG and the raster
-# sizes the icon theme and software centres look for.
 install(FILES data/icons/hicolor/scalable/apps/io.github.zachvlat.qutestore.svg
         DESTINATION share/icons/hicolor/scalable/apps)
 foreach(_size 64 128 256 512)

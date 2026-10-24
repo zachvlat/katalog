@@ -24,6 +24,8 @@ QVariant EntryModel::data(const QModelIndex &index, int role) const
     case InstalledRole: return e.installed;
     case VerifiedRole: return e.verified;
     case KindRole: return e.kind;
+    case RefRole: return e.ref;
+    case UserInstallationRole: return e.userInstallation;
     }
     return QVariant();
 }
@@ -37,7 +39,9 @@ QHash<int, QByteArray> EntryModel::roleNames() const
         {IconRole, "icon"},
         {InstalledRole, "installed"},
         {VerifiedRole, "verified"},
-        {KindRole, "kind"}
+        {KindRole, "kind"},
+        {RefRole, "ref"},
+        {UserInstallationRole, "userInstallation"}
     };
 }
 
@@ -69,8 +73,6 @@ void EntryModel::setVerifiedIds(const QSet<QString> &ids)
 {
     QList<int> changed;
     for (int row = 0; row < m_entries.size(); ++row) {
-        // Only ever promotes a row: curated Flathub rows already know they are
-        // verified even before the (paginated) verified list has loaded.
         const bool verified = m_entries.at(row).verified || ids.contains(m_entries.at(row).appId);
         if (m_entries[row].verified != verified) {
             m_entries[row].verified = verified;

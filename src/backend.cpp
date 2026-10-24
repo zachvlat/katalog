@@ -13,6 +13,11 @@
 #include <KNotification>
 #endif
 
+#ifdef HAVE_KCOLORSCHEME
+#include <KColorSchemeManager>
+#include <KColorSchemeModel>
+#endif
+
 #include <QtConcurrent/QtConcurrentRun>
 #include <QCoreApplication>
 #include <QDateTime>
@@ -27,6 +32,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSet>
+#include <QSortFilterProxyModel>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
@@ -52,13 +58,9 @@ QString humanSize(quint64 bytes)
     return QStringLiteral("%1 %2").arg(QString::number(value, 'f', 1)).arg(QLatin1String(units[unit]));
 }
 
-// AppStream component ids and Flatpak ref names do not always agree: some
-// upstream metainfo files declare a `.desktop`-suffixed id (e.g.
-// "org.kde.dolphin.desktop") while the Flatpak ref is spelled without it
-// ("org.kde.dolphin"). Normalise the id so both spellings can be compared.
 QString flatpakIdForComponentId(const QString &appId)
 {
-    constexpr qsizetype desktopSuffixLength = 8; // strlen(".desktop")
+    constexpr qsizetype desktopSuffixLength = 8;
     return appId.endsWith(QLatin1String(".desktop")) ? appId.chopped(desktopSuffixLength) : appId;
 }
 
@@ -73,9 +75,6 @@ EntryData entryFromRef(FlatpakRef *ref, const QString &summary, bool installed)
     return entry;
 }
 
-// Resolve the human-readable application name of an installed ref. Prefer the
-// appdata <name> (e.g. "Firefox") and fall back to the ref name (the reverse-DNS
-// app id, e.g. "org.mozilla.firefox") only when no appdata name is available.
 QString installedDisplayName(FlatpakRef *ref)
 {
     if (FLATPAK_IS_INSTALLED_REF(ref)) {
@@ -88,9 +87,26 @@ QString installedDisplayName(FlatpakRef *ref)
     return QString::fromUtf8(flatpak_ref_get_name(ref));
 }
 
-// Resolve the icon an installed app is deployed with. Every app ships its icon
-// inside its deployment directory, so this is the most reliable icon source and
-// it also works for remotes that carry no AppStream data at all.
+bool hasOwnUpdate(FlatpakInstallation *installation, FlatpakInstalledRef *installed)
+{
+    auto *ref = FLATPAK_REF(installed);
+    const char *origin = flatpak_installed_ref_get_origin(installed);
+    const char *deployed = flatpak_ref_get_commit(ref);
+    if (!origin || !deployed)
+        return true;
+
+    GError *error = nullptr;
+    g_autoptr(FlatpakRemoteRef) remote = flatpak_installation_fetch_remote_ref_sync_full(
+        installation, origin, flatpak_ref_get_kind(ref), flatpak_ref_get_name(ref), flatpak_ref_get_arch(ref),
+        flatpak_ref_get_branch(ref), FLATPAK_QUERY_FLAGS_ONLY_CACHED, nullptr, &error);
+    if (!remote) {
+        g_clear_error(&error);
+        return true;
+    }
+    const char *latest = flatpak_ref_get_commit(FLATPAK_REF(remote));
+    return !latest || g_strcmp0(latest, deployed) != 0;
+}
+
 QString deploymentIconUrl(FlatpakInstalledRef *ref, const QString &appId)
 {
     const char *deployDir = flatpak_installed_ref_get_deploy_dir(ref);
@@ -100,8 +116,6 @@ QString deploymentIconUrl(FlatpakInstalledRef *ref, const QString &appId)
     const QString deploy = QString::fromUtf8(deployDir);
     const QString iconsRoot = deploy + QStringLiteral("/files/share/icons");
 
-    // The icon is usually named after the app id, but the exported desktop file
-    // is authoritative when it declares a different name.
     QStringList names{appId};
     QFile desktopFile(deploy + QStringLiteral("/files/share/applications/") + appId + QStringLiteral(".desktop"));
     if (desktopFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -115,8 +129,6 @@ QString deploymentIconUrl(FlatpakInstalledRef *ref, const QString &appId)
         }
     }
 
-    // Prefer an icon from an apps/ directory, then a scalable vector icon, then
-    // the largest available raster size.
     QString bestPath;
     int bestScore = -1;
     QDirIterator it(iconsRoot, QDir::Files, QDirIterator::Subdirectories);
@@ -130,7 +142,7 @@ QString deploymentIconUrl(FlatpakInstalledRef *ref, const QString &appId)
         if (QDir(info.absolutePath()).dirName() == QLatin1String("apps"))
             score += 1000000;
 
-        const QString themeDir = info.absolutePath().section(QLatin1Char('/'), -2, -2); // e.g. "128x128"
+        const QString themeDir = info.absolutePath().section(QLatin1Char('/'), -2, -2);
         if (themeDir == QLatin1String("scalable")) {
             score += 100000;
         } else {
@@ -143,7 +155,7 @@ QString deploymentIconUrl(FlatpakInstalledRef *ref, const QString &appId)
         if (score > bestScore) {
             bestScore = score;
             bestPath = info.absoluteFilePath();
-            if (score >= 1100000) // An apps/ scalable icon is the best possible.
+            if (score >= 1100000)
                 break;
         }
     }
@@ -152,7 +164,7 @@ QString deploymentIconUrl(FlatpakInstalledRef *ref, const QString &appId)
 }
 #endif
 
-} // namespace
+}
 
 #ifdef HAVE_APPSTREAM
 namespace {
@@ -166,8 +178,6 @@ void addAppStreamLocation(AsPool *pool, const QString &directory)
 void configureAppStreamPool(AsPool *pool, FlatpakManager *manager)
 {
 #ifdef HAVE_FLATPAK
-    // Mirror Bazaar: read the AppStream bundle of every remote directly, so we
-    // do not depend on libappstream's own Flatpak discovery.
     QList<FlatpakInstallation *> installations;
     if (auto *system = manager->systemInstallation())
         installations << system;
@@ -191,15 +201,12 @@ void configureAppStreamPool(AsPool *pool, FlatpakManager *manager)
     }
 
     if (added == 0) {
-        // Fall back to libappstream's built-in Flatpak discovery.
         as_pool_set_flags(pool, AS_POOL_FLAG_LOAD_FLATPAK);
     }
 #else
     Q_UNUSED(manager)
 #endif
 
-    // Development/container escape hatch (e.g. when running inside a distrobox
-    // where /var/lib/flatpak is not mounted).
     const QByteArray extra = qgetenv("QUTESTORE_APPSTREAM_DIRS");
     if (!extra.isEmpty()) {
         for (const QByteArray &dir : extra.split(':'))
@@ -218,10 +225,6 @@ QString componentIconUrl(AsComponent *component)
     return QString();
 }
 
-// as_pool_get_components_by_id() only matches the id exactly, but some upstream
-// metainfo files declare a `.desktop`-suffixed id while the Flatpak ref (and
-// therefore the id we are asked for) omits it. Try both spellings. Returns an
-// owned box, or nullptr when nothing matches; the caller frees it.
 AsComponentBox *findComponent(AsPool *pool, const QString &appId)
 {
     AsComponentBox *box = as_pool_get_components_by_id(pool, appId.toUtf8().constData());
@@ -307,8 +310,6 @@ QString bestScreenshotUrl(AsScreenshot *screenshot)
         const gchar *url = as_image_get_url(image);
         if (!url)
             continue;
-        // Prefer the largest bitmap; skip unknown-size (0x0) entries unless we
-        // have nothing else.
         if (width > bestWidth) {
             bestWidth = width;
             best = url;
@@ -439,9 +440,6 @@ ExploreResult appStreamExplore(FlatpakManager *manager)
         return result;
     }
 
-    // The curated rows shown on the Explore page. The category names are plain
-    // XDG categories, which is what as_pool_get_components_by_categories wants.
-    // The icons are the standard XDG category icons from Breeze.
     static const struct {
         const char *category;
         const char *title;
@@ -495,9 +493,6 @@ ExploreResult appStreamExplore(FlatpakManager *manager)
             result.categories.append(section);
     }
 
-    // Offline fallback for the "New"/"Recently updated" Explore rows: order
-    // every desktop app by its most recent release date. Only used when the
-    // Flathub API rows are unavailable.
     if (AsComponentBox *all = as_pool_get_components(pool)) {
         struct DatedEntry {
             quint64 timestamp;
@@ -589,9 +584,6 @@ QList<EntryData> appStreamCategory(FlatpakManager *manager, const QString &categ
     return results;
 }
 
-// The "KDE apps" pseudo-category. AppStream has no such category, so collect
-// the desktop apps that belong to KDE: by the org.kde.* id namespace, or by
-// KDE being the declared developer (catches apps published outside org.kde.*).
 QList<EntryData> appStreamKdeApps(FlatpakManager *manager)
 {
     QList<EntryData> results;
@@ -642,7 +634,7 @@ QList<EntryData> appStreamKdeApps(FlatpakManager *manager)
     return results;
 }
 
-} // namespace
+}
 #endif
 
 #ifdef HAVE_FLATPAK
@@ -770,6 +762,11 @@ void enrichFromInstalledRef(FlatpakInstalledRef *ref, FlatpakInstallation *insta
 {
     data.installed = true;
     data.found = true;
+    g_autofree char *formattedRef = flatpak_ref_format_ref(FLATPAK_REF(ref));
+    data.ref = QString::fromUtf8(formattedRef);
+    data.isRuntime = flatpak_ref_get_kind(FLATPAK_REF(ref)) == FLATPAK_REF_KIND_RUNTIME;
+    if (data.isRuntime && data.version.isEmpty())
+        data.version = QString::fromUtf8(flatpak_ref_get_branch(FLATPAK_REF(ref)));
 
     const quint64 size = flatpak_installed_ref_get_installed_size(ref);
     if (size)
@@ -801,8 +798,6 @@ void enrichFromInstalledRef(FlatpakInstalledRef *ref, FlatpakInstallation *insta
 
     const QString appId = QString::fromUtf8(flatpak_ref_get_name(FLATPAK_REF(ref)));
 
-    // AppStream has no component for apps from remotes without metainfo data;
-    // fall back to the icon the app is deployed with.
     if (data.icon.isEmpty())
         data.icon = deploymentIconUrl(ref, appId);
 
@@ -810,7 +805,8 @@ void enrichFromInstalledRef(FlatpakInstalledRef *ref, FlatpakInstallation *insta
     if (updates) {
         for (guint i = 0; i < updates->len; ++i) {
             auto *candidate = FLATPAK_REF(g_ptr_array_index(updates, i));
-            if (appId == QString::fromUtf8(flatpak_ref_get_name(candidate))) {
+            g_autofree char *candidateRef = flatpak_ref_format_ref(candidate);
+            if (data.ref == QString::fromUtf8(candidateRef) && hasOwnUpdate(installation, ref)) {
                 data.updateAvailable = true;
                 break;
             }
@@ -843,10 +839,9 @@ void enrichFromRemoteRef(FlatpakInstallation *installation, const QString &remot
         parseMetadataBytes(metadata, data);
 }
 
-void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailData &data)
+void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, const QString &exactRef, bool userInstallation,
+                       AppDetailData &data)
 {
-    // The app id may come from AppStream and carry a `.desktop` suffix that
-    // Flatpak refs never have; compare against the ref spelling.
     const QString refId = flatpakIdForComponentId(appId);
 
     QList<FlatpakInstallation *> installations;
@@ -855,8 +850,10 @@ void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailD
     if (auto *user = manager->userInstallation())
         installations << user;
 
-    // Installed apps: the deployed ref gives us sizes and the sandbox metadata.
     for (FlatpakInstallation *installation : installations) {
+        if (!exactRef.isEmpty()
+            && installation != (userInstallation ? manager->userInstallation() : manager->systemInstallation()))
+            continue;
         g_autoptr(GPtrArray) refs = flatpak_installation_list_installed_refs(installation, nullptr, nullptr);
         if (!refs)
             continue;
@@ -865,9 +862,13 @@ void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailD
             const auto kind = flatpak_ref_get_kind(FLATPAK_REF(ref));
             if (kind != FLATPAK_REF_KIND_APP && kind != FLATPAK_REF_KIND_RUNTIME)
                 continue;
-            if (refId == QString::fromUtf8(flatpak_ref_get_name(FLATPAK_REF(ref)))) {
-                // Hand the real ref name to the UI so install/launch/remove all
-                // operate on a ref that exists.
+            bool matches = refId == QString::fromUtf8(flatpak_ref_get_name(FLATPAK_REF(ref)));
+            if (matches && !exactRef.isEmpty()) {
+                g_autofree char *formatted = flatpak_ref_format_ref(FLATPAK_REF(ref));
+                matches = exactRef == QString::fromUtf8(formatted);
+            }
+            if (matches) {
+                data.userInstallation = installation == manager->userInstallation();
                 data.appId = refId;
                 enrichFromInstalledRef(ref, installation, data);
                 return;
@@ -875,7 +876,6 @@ void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailD
         }
     }
 
-    // Not installed: fetch sizes and metadata straight from the remote.
     for (FlatpakInstallation *installation : installations) {
         g_autoptr(GPtrArray) remotes = flatpak_installation_list_remotes(installation, nullptr, nullptr);
         if (!remotes)
@@ -905,22 +905,16 @@ void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailD
     }
 }
 
-} // namespace
+}
 #endif
 
 namespace {
 
-// The per-app directory Flatpak keeps the user's data, config and cache in.
-// This is the only place app data lives: the app directories inside an
-// installation (~/.local/share/flatpak/app, /var/lib/flatpak/app) hold the
-// deployed app itself and are managed by libflatpak, never by us.
 QString appDataDir(const QString &appId)
 {
     return QDir::homePath() + QStringLiteral("/.var/app/") + appId;
 }
 
-// Runs the AppStream pass for the Explore page. Kept as a free function so it is
-// only compiled when AppStream is available.
 ExploreResult loadExploreData(FlatpakManager *manager)
 {
 #ifdef HAVE_APPSTREAM
@@ -931,10 +925,6 @@ ExploreResult loadExploreData(FlatpakManager *manager)
 #endif
 }
 
-// Collects the application ids installed in either installation. Returns false
-// when the list cannot be trusted (no Flatpak support, no installation, or a
-// listing failed): callers that delete data must then do nothing, because an
-// empty or partial list would make installed apps look uninstalled.
 bool installedAppIds(FlatpakManager *manager, QSet<QString> *ids)
 {
 #ifdef HAVE_FLATPAK
@@ -969,8 +959,6 @@ bool installedAppIds(FlatpakManager *manager, QSet<QString> *ids)
 #endif
 }
 
-// Deletes an app's data directory, but only once the app is installed in
-// neither installation (it may still be installed for the other scope).
 void removeAppDataIfUninstalled(FlatpakManager *manager, const QString &appId)
 {
     const QString refId = flatpakIdForComponentId(appId);
@@ -986,8 +974,6 @@ bool looksLikeAppId(const QString &name)
     return re.match(name).hasMatch();
 }
 
-// Extension refs (locales, debug info, …) live in the same directories but
-// belong to an installed app, so they are not leftovers.
 bool isExtensionRef(const QString &name)
 {
     static const QStringList suffixes = {
@@ -1013,8 +999,6 @@ quint64 directorySize(const QString &path)
     return total;
 }
 
-// Finds data directories in ~/.var/app that belong to applications which are
-// no longer installed (the "leftover files" shown on the cleanup page).
 LeftoverScan scanLeftovers(FlatpakManager *manager)
 {
     LeftoverScan scan;
@@ -1054,7 +1038,8 @@ LeftoverScan scanLeftovers(FlatpakManager *manager)
     return scan;
 }
 
-AppDetailData loadDetails(FlatpakManager *manager, const QString &appId, quint64 generation)
+AppDetailData loadDetails(FlatpakManager *manager, const QString &appId, const QString &ref, bool userInstallation,
+                          quint64 generation)
 {
     AppDetailData data;
 #ifdef HAVE_APPSTREAM
@@ -1063,7 +1048,10 @@ AppDetailData loadDetails(FlatpakManager *manager, const QString &appId, quint64
     if (data.appId.isEmpty())
         data.appId = appId;
 #ifdef HAVE_FLATPAK
-    enrichFromFlatpak(manager, appId, data);
+    enrichFromFlatpak(manager, appId, ref, userInstallation, data);
+#else
+    Q_UNUSED(ref)
+    Q_UNUSED(userInstallation)
 #endif
     if (data.name.isEmpty())
         data.name = appId;
@@ -1071,7 +1059,7 @@ AppDetailData loadDetails(FlatpakManager *manager, const QString &appId, quint64
     return data;
 }
 
-} // namespace
+}
 
 Backend::Backend(QObject *parent)
     : QObject(parent)
@@ -1089,13 +1077,14 @@ Backend::Backend(QObject *parent)
     m_leftovers = new LeftoverModel(this);
     m_flathub = new FlathubClient(this);
     m_nam = new QNetworkAccessManager(this);
+    setUpColorSchemes();
 
     m_watcher = new QFutureWatcher<QList<EntryData>>(this);
     connect(m_watcher, &QFutureWatcher<QList<EntryData>>::finished, this, [this]() {
         const quint64 generation = m_searchGeneration;
         const QList<EntryData> results = m_watcher->result();
         if (generation != m_searchGeneration)
-            return; // A newer search superseded this one.
+            return;
         const QSet<QString> verified = m_flathub->verifiedAppIds();
         for (const EntryData &entry : results) {
             EntryData row = entry;
@@ -1110,16 +1099,13 @@ Backend::Backend(QObject *parent)
     connect(m_detailsWatcher, &QFutureWatcher<AppDetailData>::finished, this, [this]() {
         AppDetailData data = m_detailsWatcher->result();
         if (data.generation != m_detailsGeneration)
-            return; // A newer request superseded this one.
+            return;
         const QSet<QString> verified = m_flathub->verifiedAppIds();
         data.verified = verified.contains(data.appId)
             || verified.contains(flatpakIdForComponentId(data.appId));
         m_details->apply(data);
     });
 
-    // The Explore page is assembled from two asynchronous sources: the local
-    // AppStream pool (categories + offline fallback) and the Flathub API
-    // (curated rows). explorePartDone() rebuilds the page once both are in.
     m_exploreWatcher = new QFutureWatcher<ExploreResult>(this);
     connect(m_exploreWatcher, &QFutureWatcher<ExploreResult>::finished, this, [this]() {
         const ExploreResult result = m_exploreWatcher->result();
@@ -1132,8 +1118,6 @@ Backend::Backend(QObject *parent)
     connect(m_flathub, &FlathubClient::allFinished, this, [this]() { explorePartDone(); });
     connect(m_flathub, &FlathubClient::verifiedAppsReady, this, &Backend::applyVerifiedApps);
 
-    // The verification list applies to every view (not just Explore), so fetch
-    // it once at startup and cache it in FlathubClient.
     m_flathub->fetchVerifiedApps();
 
     m_categoryWatcher = new QFutureWatcher<QList<EntryData>>(this);
@@ -1141,7 +1125,7 @@ Backend::Backend(QObject *parent)
         const quint64 generation = m_categoryGeneration;
         const QList<EntryData> results = m_categoryWatcher->result();
         if (generation != m_categoryGeneration)
-            return; // A newer category superseded this one.
+            return;
         const QSet<QString> verified = m_flathub->verifiedAppIds();
         for (const EntryData &entry : results) {
             EntryData row = entry;
@@ -1169,8 +1153,6 @@ Backend::Backend(QObject *parent)
         Q_EMIT leftoversChanged();
     });
 
-    // Background update checks: hourly while the app is running, plus one check
-    // shortly after launch so the user gets told about pending updates.
     m_updateTimer = new QTimer(this);
     m_updateTimer->setInterval(60 * 60 * 1000);
     connect(m_updateTimer, &QTimer::timeout, this, &Backend::checkForUpdates);
@@ -1224,7 +1206,7 @@ QList<EntryData> refSearch(FlatpakManager *manager, const QString &query)
     return results;
 }
 
-} // namespace
+}
 #endif
 
 void Backend::search(const QString &query)
@@ -1253,60 +1235,75 @@ void Backend::search(const QString &query)
 
 namespace {
 
-// Lists installed apps and pending updates. Runs on a worker thread:
-// list_installed_refs_for_update() contacts every remote, so it can take
-// seconds (or hang until a network timeout).
 InstalledLists loadInstalledLists(FlatpakManager *manager)
 {
     InstalledLists lists;
 #ifdef HAVE_FLATPAK
     QSet<QString> seen;
-    QSet<QString> updateIds;
+    QSet<QString> updateKeys;
 
-    QList<FlatpakInstallation *> installations;
-    if (auto *system = manager->systemInstallation())
-        installations << system;
-    if (auto *user = manager->userInstallation())
-        installations << user;
+    const auto makeEntry = [](FlatpakRef *ref, bool userInstallation, const QString &status) {
+        const bool runtime = flatpak_ref_get_kind(ref) == FLATPAK_REF_KIND_RUNTIME;
+        const QString name = QString::fromUtf8(flatpak_ref_get_name(ref));
+        EntryData entry = entryFromRef(ref, status, true);
+        entry.name = installedDisplayName(ref);
+        entry.kind = runtime ? 1 : 0;
+        entry.userInstallation = userInstallation;
+        g_autofree char *formatted = flatpak_ref_format_ref(ref);
+        entry.ref = QString::fromUtf8(formatted);
+        if (runtime) {
+            entry.summary = QCoreApplication::translate("Backend", "Branch %1")
+                                .arg(QString::fromUtf8(flatpak_ref_get_branch(ref)));
+        } else if (FLATPAK_IS_INSTALLED_REF(ref)) {
+            entry.icon = deploymentIconUrl(FLATPAK_INSTALLED_REF(ref), name);
+        }
+        return entry;
+    };
 
-    for (FlatpakInstallation *installation : installations) {
-        g_autoptr(GPtrArray) installed = flatpak_installation_list_installed_refs(installation, nullptr, nullptr);
+    const struct {
+        FlatpakInstallation *installation;
+        bool user;
+    } installations[] = {
+        {manager->systemInstallation(), false},
+        {manager->userInstallation(), true},
+    };
+
+    for (const auto &scope : installations) {
+        if (!scope.installation)
+            continue;
+        const QString prefix = scope.user ? QStringLiteral("user:") : QStringLiteral("system:");
+
+        g_autoptr(GPtrArray) installed =
+            flatpak_installation_list_installed_refs(scope.installation, nullptr, nullptr);
         if (installed) {
             for (guint i = 0; i < installed->len; ++i) {
                 auto *ref = FLATPAK_REF(g_ptr_array_index(installed, i));
                 const auto kind = flatpak_ref_get_kind(ref);
                 if (kind != FLATPAK_REF_KIND_APP && kind != FLATPAK_REF_KIND_RUNTIME)
                     continue;
-                const QString name = QString::fromUtf8(flatpak_ref_get_name(ref));
-                if (seen.contains(name))
+                EntryData entry = makeEntry(ref, scope.user, QCoreApplication::translate("Backend", "Installed"));
+                if (seen.contains(prefix + entry.ref))
                     continue;
-                seen.insert(name);
-                EntryData entry = entryFromRef(ref, QCoreApplication::translate("Backend", "Installed"), true);
-                entry.name = installedDisplayName(ref);
-                if (FLATPAK_IS_INSTALLED_REF(ref))
-                    entry.icon = deploymentIconUrl(FLATPAK_INSTALLED_REF(ref), name);
-                entry.kind = (kind == FLATPAK_REF_KIND_RUNTIME) ? 1 : 0;
+                seen.insert(prefix + entry.ref);
                 lists.installed.append(entry);
             }
         }
 
         g_autoptr(GPtrArray) forUpdate =
-            flatpak_installation_list_installed_refs_for_update(installation, nullptr, nullptr);
+            flatpak_installation_list_installed_refs_for_update(scope.installation, nullptr, nullptr);
         if (forUpdate) {
             for (guint i = 0; i < forUpdate->len; ++i) {
                 auto *ref = FLATPAK_REF(g_ptr_array_index(forUpdate, i));
                 const auto kind = flatpak_ref_get_kind(ref);
                 if (kind != FLATPAK_REF_KIND_APP && kind != FLATPAK_REF_KIND_RUNTIME)
                     continue;
-                const QString name = QString::fromUtf8(flatpak_ref_get_name(ref));
-                if (updateIds.contains(name))
+                if (FLATPAK_IS_INSTALLED_REF(ref) && !hasOwnUpdate(scope.installation, FLATPAK_INSTALLED_REF(ref)))
                     continue;
-                updateIds.insert(name);
-                EntryData entry = entryFromRef(ref, QCoreApplication::translate("Backend", "Update available"), true);
-                entry.name = installedDisplayName(ref);
-                if (FLATPAK_IS_INSTALLED_REF(ref))
-                    entry.icon = deploymentIconUrl(FLATPAK_INSTALLED_REF(ref), name);
-                entry.kind = (kind == FLATPAK_REF_KIND_RUNTIME) ? 1 : 0;
+                EntryData entry =
+                    makeEntry(ref, scope.user, QCoreApplication::translate("Backend", "Update available"));
+                if (updateKeys.contains(prefix + entry.ref))
+                    continue;
+                updateKeys.insert(prefix + entry.ref);
                 lists.updates.append(entry);
             }
         }
@@ -1317,12 +1314,10 @@ InstalledLists loadInstalledLists(FlatpakManager *manager)
     return lists;
 }
 
-} // namespace
+}
 
 void Backend::refreshInstalled()
 {
-    // One listing at a time; a request that arrives meanwhile (e.g. a
-    // transaction finishing during the hourly check) runs right after it.
     if (m_loadingInstalled) {
         m_installedRefreshQueued = true;
         return;
@@ -1335,8 +1330,6 @@ void Backend::refreshInstalled()
 
 void Backend::applyInstalledLists(const InstalledLists &lists)
 {
-    // Replace the rows in one step so an open Installed/Updates page never
-    // flashes empty.
     const QSet<QString> verified = m_flathub->verifiedAppIds();
     QList<EntryData> installed = lists.installed;
     for (EntryData &entry : installed)
@@ -1356,7 +1349,7 @@ void Backend::applyInstalledLists(const InstalledLists &lists)
         else updatesApps.append(e);
     }
 
-    m_installed->setEntries(installed);
+    m_installed->setEntries(installedApps);
     m_installedRuntimes->setEntries(installedRuntimes);
     m_updates->setEntries(updates);
     m_updatesApps->setEntries(updatesApps);
@@ -1397,7 +1390,6 @@ void Backend::loadExplore()
     m_exploreModels.clear();
     Q_EMIT exploreChanged();
 
-    // Two asynchronous sources: the AppStream worker and the Flathub API.
     m_explorePending = 2;
     m_exploreWatcher->setFuture(QtConcurrent::run([this]() { return loadExploreData(m_flatpak); }));
     m_flathub->fetchExplore();
@@ -1422,8 +1414,6 @@ void Backend::buildExplore()
 
     const QSet<QString> verified = m_flathub->verifiedAppIds();
 
-    // Curated rows, in the requested order. Each falls back to the AppStream
-    // release-date list when the Flathub API row is unavailable (offline).
     struct RowDef {
         const char *key;
         QString title;
@@ -1490,7 +1480,10 @@ void Backend::applyVerifiedApps()
     const QSet<QString> &ids = m_flathub->verifiedAppIds();
     m_search->setVerifiedIds(ids);
     m_installed->setVerifiedIds(ids);
+    m_installedRuntimes->setVerifiedIds(ids);
     m_updates->setVerifiedIds(ids);
+    m_updatesApps->setVerifiedIds(ids);
+    m_updatesRuntimes->setVerifiedIds(ids);
     m_category->setVerifiedIds(ids);
     for (EntryModel *model : m_exploreModels)
         model->setVerifiedIds(ids);
@@ -1523,12 +1516,12 @@ void Backend::loadCategory(const QString &category)
 #endif
 }
 
-void Backend::openApp(const QString &appId)
+void Backend::openApp(const QString &appId, const QString &ref, bool userInstallation)
 {
     const quint64 generation = ++m_detailsGeneration;
     m_details->reset(appId);
-    m_detailsWatcher->setFuture(QtConcurrent::run([this, appId, generation]() {
-        return loadDetails(m_flatpak, appId, generation);
+    m_detailsWatcher->setFuture(QtConcurrent::run([this, appId, ref, userInstallation, generation]() {
+        return loadDetails(m_flatpak, appId, ref, userInstallation, generation);
     }));
 }
 
@@ -1538,22 +1531,18 @@ void Backend::installApp(const QString &appId)
     startTransaction(Transaction::Install, appId);
 }
 
-void Backend::updateApp(const QString &appId)
+void Backend::updateApp(const QString &appId, const QString &ref, bool userInstallation)
 {
-    qWarning() << "Backend::updateApp called for" << appId;
     m_updateQueue.clear();
-    startTransaction(Transaction::Update, appId);
+    startTransaction(Transaction::Update, appId, false, ref, userInstallation);
 }
 
 void Backend::updateAll()
 {
     if (m_transaction && m_transaction->running())
-        return; // An operation is already in flight.
+        return;
 
-    QStringList pending;
-    const QList<EntryData> &rows = m_updates->entries();
-    for (const EntryData &entry : rows)
-        pending << entry.appId;
+    const QList<EntryData> pending = m_updates->entries();
     if (pending.isEmpty())
         return;
 
@@ -1561,20 +1550,16 @@ void Backend::updateAll()
     startNextQueuedUpdate();
 }
 
-void Backend::removeApp(const QString &appId, bool deleteData)
+void Backend::removeApp(const QString &appId, bool deleteData, const QString &ref, bool userInstallation)
 {
     m_updateQueue.clear();
-    startTransaction(Transaction::Remove, appId, deleteData);
+    startTransaction(Transaction::Remove, appId, deleteData, ref, userInstallation);
 }
 
 void Backend::launchApp(const QString &appId)
 {
     const QStringList args{QStringLiteral("run"), appId};
 
-    // Inside a Flatpak sandbox there is no nested Flatpak session: starting a
-    // second sandbox from within one has to go through the host's Flatpak via
-    // the org.freedesktop.Flatpak portal ("flatpak-spawn --host"). The bundled
-    // flatpak would otherwise try (and fail) to run the app in the sandbox.
     if (QFile::exists(QStringLiteral("/.flatpak-info"))
         && QProcess::startDetached(QStringLiteral("flatpak-spawn"),
                                    QStringList{QStringLiteral("--host"), QStringLiteral("flatpak")} + args))
@@ -1594,38 +1579,34 @@ void Backend::dismissTransaction()
     Q_EMIT currentTransactionChanged();
 }
 
-void Backend::startTransaction(int kind, const QString &appId, bool deleteData)
+void Backend::startTransaction(int kind, const QString &appId, bool deleteData, const QString &ref,
+                               bool userInstallation)
 {
     if (m_transaction && m_transaction->running())
-        return; // A transaction is already in flight.
+        return;
 
     if (m_transaction) {
         m_transaction->deleteLater();
         m_transaction = nullptr;
     }
 
-    auto *transaction = new Transaction(m_flatpak, static_cast<Transaction::Kind>(kind), appId, this);
+    auto *transaction = new Transaction(m_flatpak, static_cast<Transaction::Kind>(kind), appId, ref,
+                                        userInstallation, this);
     m_transaction = transaction;
     Q_EMIT currentTransactionChanged();
 
-    connect(transaction, &Transaction::completed, this, [this]() { qWarning() << "Transaction completed, refreshing"; refreshInstalled(); });
+    connect(transaction, &Transaction::completed, this, &Backend::refreshInstalled);
     connect(transaction, &Transaction::completed, this, [this, appId, deleteData]() {
-        // The user's data is only deleted when they explicitly asked for it in
-        // the removal dialog, like `flatpak uninstall --delete-data`.
         if (deleteData)
             removeAppDataIfUninstalled(m_flatpak, appId);
-        // Keep an open detail page in sync after install/update/remove.
         if (m_details && m_details->appId() == appId)
-            openApp(appId);
+            openApp(appId, m_details->ref(), m_details->userInstallation());
     });
     connect(transaction, &Transaction::finishedChanged, this, [this, transaction]() {
         if (m_transaction == transaction)
             Q_EMIT currentTransactionChanged();
     });
 
-    // "Update all" runs the queued updates one after the next. The chain stops
-    // at the first failure so the error stays on screen instead of being
-    // quietly followed by more operations.
     connect(transaction, &Transaction::finishedChanged, this, [this, transaction]() {
         if (m_updateQueue.isEmpty())
             return;
@@ -1642,7 +1623,8 @@ void Backend::startNextQueuedUpdate()
 {
     if (m_updateQueue.isEmpty() || (m_transaction && m_transaction->running()))
         return;
-    startTransaction(Transaction::Update, m_updateQueue.takeFirst());
+    const EntryData next = m_updateQueue.takeFirst();
+    startTransaction(Transaction::Update, next.appId, false, next.ref, next.userInstallation);
 }
 
 void Backend::refreshRemotes()
@@ -1683,12 +1665,6 @@ void Backend::refreshRemotes()
     m_remotes->setRemotes(remotes);
 }
 
-
-// Remote (repository) operations. Each one runs on a worker thread: changing a
-// system-wide remote goes through the Flatpak system helper and can wait on a
-// polkit password prompt, and adding a remote downloads its AppStream bundle.
-// Neither may block the UI.
-
 #ifdef HAVE_FLATPAK
 namespace {
 
@@ -1697,9 +1673,6 @@ QString errorText(GError *error, const char *fallback)
     return QString::fromUtf8(error && error->message ? error->message : fallback);
 }
 
-// Adds a configured remote and pulls its AppStream metadata so its apps show up
-// in Explore and search. A failed metadata download does not undo the add: the
-// next refresh retries it.
 RemoteOpResult addConfiguredRemote(FlatpakInstallation *installation, FlatpakRemote *remote, const QString &name)
 {
     RemoteOpResult result;
@@ -1724,7 +1697,6 @@ RemoteOpResult addConfiguredRemote(FlatpakInstallation *installation, FlatpakRem
     return result;
 }
 
-// A bare repository URL: only works for repositories that are not signed.
 RemoteOpResult addRemoteFromUrl(FlatpakInstallation *installation, const QString &name, const QString &url)
 {
     g_autoptr(FlatpakRemote) remote = flatpak_remote_new(name.toUtf8().constData());
@@ -1732,7 +1704,6 @@ RemoteOpResult addRemoteFromUrl(FlatpakInstallation *installation, const QString
     return addConfiguredRemote(installation, remote, name);
 }
 
-// A downloaded .flatpakrepo file, which carries the remote's GPG key.
 RemoteOpResult addRemoteFromFile(FlatpakInstallation *installation, const QString &name, const QByteArray &file)
 {
     g_autoptr(GBytes) bytes = g_bytes_new(file.constData(), file.size());
@@ -1786,7 +1757,7 @@ RemoteOpResult setRemoteEnabledSync(FlatpakInstallation *installation, const QSt
     return result;
 }
 
-} // namespace
+}
 #endif
 
 bool Backend::beginRemoteOperation()
@@ -1827,7 +1798,6 @@ void Backend::finishRemoteOperation(const RemoteOpResult &result)
     m_remoteSucceeded = result.succeeded;
     Q_EMIT remoteMessageChanged();
     refreshRemotes();
-    // The set of remotes decides which apps Explore can show.
     if (result.reloadExplore)
         loadExplore();
 }
@@ -1837,9 +1807,6 @@ void Backend::addRemote(const QString &name, const QString &url, bool user)
     if (name.isEmpty() || url.isEmpty() || !beginRemoteOperation())
         return;
 
-    // A .flatpakrepo file describes the remote completely, including the GPG
-    // key its content is signed with. Without that key a signed remote such as
-    // Flathub can be added but nothing can be installed from it.
     if (url.endsWith(QLatin1String(".flatpakrepo"), Qt::CaseInsensitive)) {
         QNetworkRequest request{QUrl(url)};
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -1914,7 +1881,6 @@ void Backend::refreshLeftovers()
 
 void Backend::removeLeftover(const QString &path)
 {
-    // Only paths the last scan reported can be deleted, never an arbitrary one.
     const QString appId = m_leftovers->appIdForPath(path);
     if (appId.isEmpty() || m_scanningLeftovers)
         return;
@@ -1922,8 +1888,6 @@ void Backend::removeLeftover(const QString &path)
     m_scanningLeftovers = true;
     Q_EMIT leftoversChanged();
     m_leftoverWatcher->setFuture(QtConcurrent::run([this, appId]() {
-        // Re-checks that the app is still not installed, then deletes off the
-        // UI thread (data directories can be gigabytes) and rescans.
         removeAppDataIfUninstalled(m_flatpak, appId);
         return scanLeftovers(m_flatpak);
     }));
@@ -1932,10 +1896,8 @@ void Backend::removeLeftover(const QString &path)
 void Backend::checkForUpdates()
 {
     if (m_transaction && m_transaction->running())
-        return; // Don't disturb an in-flight transaction.
+        return;
 
-    // The notification is sent from applyInstalledLists() once the
-    // asynchronous listing is in.
     m_notifyAfterRefresh = true;
     refreshInstalled();
 }
@@ -1950,5 +1912,60 @@ void Backend::notifyUpdates(int count)
                          KNotification::CloseOnTimeout);
 #else
     Q_UNUSED(count)
+#endif
+}
+
+#ifdef HAVE_KCOLORSCHEME
+namespace {
+
+const QRegularExpression &offeredSchemeIds()
+{
+    static const QRegularExpression ids(QStringLiteral("^(|BreezeDark|BreezeLight)$"));
+    return ids;
+}
+
+}
+#endif
+
+void Backend::setUpColorSchemes()
+{
+#ifdef HAVE_KCOLORSCHEME
+    auto *manager = KColorSchemeManager::instance();
+
+    auto *proxy = new QSortFilterProxyModel(this);
+    proxy->setSourceModel(manager->model());
+    proxy->setFilterRole(KColorSchemeModel::IdRole);
+    proxy->setFilterRegularExpression(offeredSchemeIds());
+    m_colorSchemes = proxy;
+
+    if (!offeredSchemeIds().match(manager->activeSchemeId()).hasMatch())
+        manager->activateSchemeId(QString());
+#endif
+}
+
+QAbstractItemModel *Backend::colorSchemes() const
+{
+    return m_colorSchemes;
+}
+
+int Backend::colorSchemeIndex() const
+{
+#ifdef HAVE_KCOLORSCHEME
+    auto *manager = KColorSchemeManager::instance();
+    const QModelIndex source = manager->indexForSchemeId(manager->activeSchemeId());
+    const QModelIndex row = m_colorSchemes->mapFromSource(source);
+    return row.isValid() ? row.row() : 0;
+#else
+    return 0;
+#endif
+}
+
+void Backend::setColorSchemeIndex(int row)
+{
+#ifdef HAVE_KCOLORSCHEME
+    KColorSchemeManager::instance()->activateScheme(m_colorSchemes->mapToSource(m_colorSchemes->index(row, 0)));
+    Q_EMIT colorSchemeChanged();
+#else
+    Q_UNUSED(row)
 #endif
 }

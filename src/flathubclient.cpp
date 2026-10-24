@@ -16,17 +16,13 @@ const char *const FlathubClient::UpdatedKey = "updated";
 
 namespace {
 
-// How many tiles a curated row shows. The API returns the whole collection; we
-// only need enough for a horizontal strip.
 constexpr int kRowLimit = 24;
 
-// The verified collection is paginated by Meilisearch; this is the largest page
-// size the API accepts.
 constexpr int kVerifiedPageSize = 250;
 
 struct CollectionDef {
     const char *key;
-    const char *path; // appended to the API base URL
+    const char *path;
 };
 
 const CollectionDef kCollections[] = {
@@ -69,7 +65,7 @@ QList<EntryData> parseCollection(const QByteArray &data)
     return entries;
 }
 
-} // namespace
+}
 
 FlathubClient::FlathubClient(QObject *parent)
     : QObject(parent)
@@ -161,7 +157,6 @@ void FlathubClient::handleVerifiedPage(int page, QNetworkReply *reply)
             return;
         }
     } else if (page == 1) {
-        // Nothing usable at all; allow a later retry.
         m_verifiedLoading = false;
         Q_EMIT verifiedAppsReady();
         return;

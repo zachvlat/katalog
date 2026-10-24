@@ -14,10 +14,6 @@ Kirigami.Page {
 
     title: app && app.name ? app.name : (app ? app.appId : "")
 
-    // The page takes over the main panel (the panel shows a single column at a
-    // time, see Main.qml), the same way a category does. PageRow's "back" only
-    // moves between columns without ever removing one, so the page carries an
-    // explicit action that really pops itself.
     signal closeRequested()
 
     actions: [
@@ -28,7 +24,6 @@ Kirigami.Page {
         }
     ]
 
-    // Keep the standard Back shortcut (Alt+Left) working too.
     onBackRequested: event => {
         event.accepted = true
         page.closeRequested()
@@ -44,7 +39,6 @@ Kirigami.Page {
             width: scroll.availableWidth
             spacing: Kirigami.Units.largeSpacing
 
-            // ----- Loading -----
             RowLayout {
                 Layout.fillWidth: true
                 Layout.topMargin: Kirigami.Units.largeSpacing
@@ -59,7 +53,6 @@ Kirigami.Page {
                 }
             }
 
-            // ----- Header -----
             RowLayout {
                 Layout.fillWidth: true
                 Layout.topMargin: Kirigami.Units.largeSpacing
@@ -70,7 +63,6 @@ Kirigami.Page {
                     Layout.alignment: Qt.AlignTop
                     Layout.preferredWidth: 128
                     Layout.preferredHeight: 128
-                    // AppStream may return either an icon URL or a themed name.
                     readonly property string iconSource: page.app && page.app.icon ? page.app.icon : ""
                     readonly property bool iconIsUrl: iconSource.indexOf("://") !== -1
 
@@ -84,7 +76,6 @@ Kirigami.Page {
                         asynchronous: true
                         visible: parent.iconIsUrl && status === Image.Ready
                     }
-                    // Themed icon, or a placeholder while a URL loads / on failure.
                     Kirigami.Icon {
                         anchors.fill: parent
                         visible: !headerImage.visible
@@ -106,8 +97,6 @@ Kirigami.Page {
                             wrapMode: Text.WordWrap
                             text: page.app ? page.app.name : ""
                             Layout.fillWidth: true
-                            // Grow (and wrap) for long titles, but never past the
-                            // text's natural width so the badge stays next to it.
                             Layout.maximumWidth: implicitWidth
                         }
                         VerifiedBadge {
@@ -140,7 +129,7 @@ Kirigami.Page {
                             onClicked: backend.installApp(page.app.appId)
                         }
                         Button {
-                            visible: page.app && page.app.installed
+                            visible: page.app && page.app.installed && !page.app.isRuntime
                             text: qsTr("Launch")
                             icon.name: "system-run"
                             onClicked: backend.launchApp(page.app.appId)
@@ -150,7 +139,7 @@ Kirigami.Page {
                             text: qsTr("Update")
                             icon.name: "system-software-update"
                             enabled: !page.busy
-                            onClicked: backend.updateApp(page.app.appId)
+                            onClicked: backend.updateApp(page.app.appId, page.app.ref, page.app.userInstallation)
                         }
                         Button {
                             visible: page.app && page.app.installed
@@ -171,7 +160,6 @@ Kirigami.Page {
                 visible: page.app && !page.app.loading
             }
 
-            // ----- Screenshots -----
             Flickable {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 260
@@ -212,7 +200,6 @@ Kirigami.Page {
                 }
             }
 
-            // ----- Description -----
             Label {
                 Layout.fillWidth: true
                 visible: page.app && !page.app.loading && text.length > 0
@@ -222,7 +209,6 @@ Kirigami.Page {
                 onLinkActivated: link => Qt.openUrlExternally(link)
             }
 
-            // ----- Details grid -----
             GridLayout {
                 Layout.fillWidth: true
                 visible: page.app && !page.app.loading
@@ -316,7 +302,6 @@ Kirigami.Page {
                 }
             }
 
-            // ----- Permissions -----
             ColumnLayout {
                 Layout.fillWidth: true
                 visible: page.app && !page.app.loading && page.app.permissions.length > 0
@@ -345,7 +330,6 @@ Kirigami.Page {
                 }
             }
 
-            // ----- Releases -----
             ColumnLayout {
                 Layout.fillWidth: true
                 visible: page.app && !page.app.loading && page.app.releases.length > 0
@@ -383,7 +367,6 @@ Kirigami.Page {
                 }
             }
 
-            // ----- Not found -----
             Label {
                 Layout.fillWidth: true
                 Layout.topMargin: Kirigami.Units.largeSpacing
@@ -400,8 +383,6 @@ Kirigami.Page {
         }
     }
 
-    // Removal confirmation. The app's own data (~/.var/app/<id>: settings,
-    // profiles, saves) is kept unless the user explicitly opts in.
     Dialog {
         id: removeDialog
         parent: Overlay.overlay
@@ -422,6 +403,7 @@ Kirigami.Page {
             CheckBox {
                 id: deleteDataBox
                 Layout.fillWidth: true
+                visible: page.app && !page.app.isRuntime
                 text: qsTr("Also delete its settings and data")
             }
             Label {
@@ -445,10 +427,10 @@ Kirigami.Page {
             }
         }
 
-        onAccepted: backend.removeApp(page.app.appId, deleteDataBox.checked)
+        onAccepted: backend.removeApp(page.app.appId, deleteDataBox.checked && !page.app.isRuntime,
+                                       page.app.ref, page.app.userInstallation)
     }
 
-    // Full-size view of a screenshot, opened by clicking one in the strip.
     Popup {
         id: shotViewer
         parent: Overlay.overlay

@@ -20,9 +20,7 @@ struct ResolvedOperation {
 
 FlatpakRef *findAppRef(GPtrArray *refs, const QString &appId)
 {
-    // The requested id may come from AppStream with a `.desktop` suffix that
-    // Flatpak refs never have; normalise before comparing.
-    constexpr qsizetype desktopSuffixLength = 8; // strlen(".desktop")
+    constexpr qsizetype desktopSuffixLength = 8;
     const QString wanted =
         appId.endsWith(QLatin1String(".desktop")) ? appId.chopped(desktopSuffixLength) : appId;
 
@@ -37,17 +35,34 @@ FlatpakRef *findAppRef(GPtrArray *refs, const QString &appId)
     return nullptr;
 }
 
-bool resolveOperation(FlatpakManager *manager, Transaction::Kind kind, const QString &appId,
-                      ResolvedOperation &out)
+bool resolveOperation(FlatpakManager *manager, Transaction::Kind kind, const QString &appId, const QString &exactRef,
+                      bool userInstallation, ResolvedOperation &out)
 {
-    qWarning() << "resolveOperation" << kind << appId;
+    if (!exactRef.isEmpty()) {
+        FlatpakInstallation *installation =
+            userInstallation ? manager->userInstallation() : manager->systemInstallation();
+        if (!installation)
+            return false;
+        g_autoptr(GPtrArray) refs = flatpak_installation_list_installed_refs(installation, nullptr, nullptr);
+        if (!refs)
+            return false;
+        for (guint i = 0; i < refs->len; ++i) {
+            g_autofree char *formatted = flatpak_ref_format_ref(FLATPAK_REF(g_ptr_array_index(refs, i)));
+            if (exactRef == QString::fromUtf8(formatted)) {
+                out.installation = installation;
+                out.installedRef = exactRef;
+                return true;
+            }
+        }
+        return false;
+    }
+
     QList<FlatpakInstallation *> installations;
     if (auto *system = manager->systemInstallation())
         installations << system;
     if (auto *user = manager->userInstallation())
         installations << user;
 
-    // Look for an installed ref first.
     for (FlatpakInstallation *installation : installations) {
         g_autoptr(GPtrArray) refs = flatpak_installation_list_installed_refs(installation, nullptr, nullptr);
         if (!refs)
@@ -56,20 +71,16 @@ bool resolveOperation(FlatpakManager *manager, Transaction::Kind kind, const QSt
             g_autofree char *formatted = flatpak_ref_format_ref(ref);
             out.installation = installation;
             out.installedRef = QString::fromUtf8(formatted);
-            qWarning() << "resolved installed" << out.installedRef;
             break;
         }
     }
 
-    // Already installed: updates/removals are resolved, and a plain install
-    // becomes a reinstall/update of the installed ref.
     if (!out.installedRef.isEmpty())
         return true;
 
     if (kind != Transaction::Install)
         return false;
 
-    // Find the ref in a remote so we can install it.
     for (FlatpakInstallation *installation : installations) {
         g_autoptr(GPtrArray) remotes = flatpak_installation_list_remotes(installation, nullptr, nullptr);
         if (!remotes)
@@ -96,7 +107,7 @@ bool resolveOperation(FlatpakManager *manager, Transaction::Kind kind, const QSt
     return false;
 }
 
-} // namespace
+}
 
 static void onNewOperation(FlatpakTransaction *, FlatpakTransactionOperation *operation,
                            FlatpakTransactionProgress *progress, gpointer user_data)
@@ -132,13 +143,16 @@ static gboolean onOperationError(FlatpakTransaction *, FlatpakTransactionOperati
     self->setPendingError(message);
     return FALSE;
 }
-#endif // HAVE_FLATPAK
+#endif
 
-Transaction::Transaction(FlatpakManager *manager, Kind kind, const QString &appId, QObject *parent)
+Transaction::Transaction(FlatpakManager *manager, Kind kind, const QString &appId, const QString &ref,
+                         bool userInstallation, QObject *parent)
     : QObject(parent)
     , m_manager(manager)
     , m_kind(kind)
     , m_appId(appId)
+    , m_ref(ref)
+    , m_userInstallation(userInstallation)
 {
 }
 
@@ -180,7 +194,6 @@ void Transaction::publishProgress(int progress, const QString &status)
 
 void Transaction::setPendingError(const QString &message)
 {
-    // Only touched from the worker thread.
     m_pendingError = message;
 }
 
@@ -191,7 +204,7 @@ void Transaction::runWorker()
 
 #ifdef HAVE_FLATPAK
     ResolvedOperation resolved;
-    if (!resolveOperation(m_manager, m_kind, m_appId, resolved) || !resolved.installation) {
+    if (!resolveOperation(m_manager, m_kind, m_appId, m_ref, m_userInstallation, resolved) || !resolved.installation) {
         errorMessage = tr("Could not find “%1” in any remote.").arg(m_appId);
     } else {
         GError *error = nullptr;
@@ -200,8 +213,6 @@ void Transaction::runWorker()
             errorMessage = QString::fromUtf8(error ? error->message : "Could not create transaction");
             g_clear_error(&error);
         } else {
-            // Allow polkit authentication prompts for system-wide operations;
-            // these are handled by the desktop's polkit agent, not by us.
             flatpak_transaction_set_no_interaction(txn, FALSE);
             flatpak_transaction_add_default_dependency_sources(txn);
 
@@ -211,10 +222,8 @@ void Transaction::runWorker()
 
             gboolean added = FALSE;
             if (m_kind == Remove) {
-                qWarning() << "Adding uninstall for" << resolved.installedRef;
                 added = flatpak_transaction_add_uninstall(txn, resolved.installedRef.toUtf8().constData(), &error);
             } else if (m_kind == Update || !resolved.installedRef.isEmpty()) {
-                qWarning() << "Adding update for" << resolved.installedRef;
                 added = flatpak_transaction_add_update(txn, resolved.installedRef.toUtf8().constData(),
                                                        nullptr, nullptr, &error);
             } else {
@@ -226,14 +235,11 @@ void Transaction::runWorker()
                 errorMessage = QString::fromUtf8(error ? error->message : "Could not add operation");
                 g_clear_error(&error);
             } else {
-                qWarning() << "About to run transaction";
                 success = flatpak_transaction_run(txn, nullptr, &error);
-                qWarning() << "Transaction run done, success:" << success;
                 if (!success) {
                     errorMessage = !m_pendingError.isEmpty()
                                        ? m_pendingError
                                        : QString::fromUtf8(error ? error->message : "Transaction failed");
-                    qWarning() << "Transaction failed:" << errorMessage;
                     g_clear_error(&error);
                 }
             }

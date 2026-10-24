@@ -28,7 +28,8 @@ public:
     };
     Q_ENUM(Kind)
 
-    Transaction(FlatpakManager *manager, Kind kind, const QString &appId, QObject *parent = nullptr);
+    Transaction(FlatpakManager *manager, Kind kind, const QString &appId, const QString &ref = QString(),
+                bool userInstallation = false, QObject *parent = nullptr);
 
     QString appId() const { return m_appId; }
     QString operation() const;
@@ -41,7 +42,6 @@ public:
 
     Q_INVOKABLE void start();
 
-    // Called from the transaction's worker thread; these marshal to the UI thread.
     void publishProgress(int progress, const QString &status);
     void setPendingError(const QString &message);
 
@@ -58,6 +58,8 @@ private:
     QString m_pendingError;
     Kind m_kind;
     QString m_appId;
+    QString m_ref;
+    bool m_userInstallation = false;
 
     bool m_running = false;
     bool m_finished = false;

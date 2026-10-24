@@ -6,8 +6,6 @@
 #include <QStringList>
 #include <QVariantList>
 
-// Plain data extracted on a worker thread and handed to the (UI-thread) Details
-// object. Kept free of any AppStream/Flatpak types so it can cross threads.
 struct ScreenshotData {
     QString url;
     QString caption;
@@ -16,7 +14,7 @@ struct ScreenshotData {
 struct ReleaseData {
     QString version;
     QString date;
-    QString description; // HTML
+    QString description;
 };
 
 struct AppDetailData {
@@ -26,7 +24,7 @@ struct AppDetailData {
     QString name;
     QString developer;
     QString summary;
-    QString description; // HTML
+    QString description;
     QString license;
     QString version;
     QString runtime;
@@ -50,8 +48,10 @@ struct AppDetailData {
     bool installed = false;
     bool updateAvailable = false;
     bool verified = false;
+    QString ref;
+    bool userInstallation = false;
+    bool isRuntime = false;
 
-    // Internal: used to discard stale asynchronous loads. Not exposed in QML.
     quint64 generation = 0;
 };
 
@@ -83,6 +83,9 @@ class Details : public QObject {
     Q_PROPERTY(bool installed READ installed NOTIFY changed)
     Q_PROPERTY(bool updateAvailable READ updateAvailable NOTIFY changed)
     Q_PROPERTY(bool verified READ verified NOTIFY changed)
+    Q_PROPERTY(QString ref READ ref NOTIFY changed)
+    Q_PROPERTY(bool userInstallation READ userInstallation NOTIFY changed)
+    Q_PROPERTY(bool isRuntime READ isRuntime NOTIFY changed)
 public:
     explicit Details(QObject *parent = nullptr);
 
@@ -112,6 +115,9 @@ public:
     bool installed() const { return m_data.installed; }
     bool updateAvailable() const { return m_data.updateAvailable; }
     bool verified() const { return m_data.verified; }
+    QString ref() const { return m_data.ref; }
+    bool userInstallation() const { return m_data.userInstallation; }
+    bool isRuntime() const { return m_data.isRuntime; }
 
     void setLoading(bool loading);
     void setVerified(bool verified);

@@ -4,7 +4,6 @@
 #include <QList>
 #include <QString>
 
-// A Flatpak remote (repository), as shown on the Repositories page.
 struct RemoteData {
     QString name;
     QString title;
@@ -13,8 +12,6 @@ struct RemoteData {
     bool isUser = false;
 };
 
-// The outcome of adding, removing, enabling or disabling a remote, produced on
-// a worker thread and shown on the Repositories page.
 struct RemoteOpResult {
     bool succeeded = false;
     bool reloadExplore = false;

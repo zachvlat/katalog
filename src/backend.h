@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QAbstractItemModel>
 #include <QFutureWatcher>
 #include <QObject>
 #include <QStringList>
@@ -17,6 +18,7 @@
 #include "transaction.h"
 
 class QNetworkAccessManager;
+class QSortFilterProxyModel;
 
 class Backend : public QObject {
     Q_OBJECT
@@ -38,6 +40,8 @@ class Backend : public QObject {
     Q_PROPERTY(RemoteModel *remotes READ remotes CONSTANT)
     Q_PROPERTY(LeftoverModel *leftovers READ leftovers CONSTANT)
     Q_PROPERTY(bool loadingInstalled READ loadingInstalled NOTIFY installedChanged)
+    Q_PROPERTY(QAbstractItemModel *colorSchemes READ colorSchemes CONSTANT)
+    Q_PROPERTY(int colorSchemeIndex READ colorSchemeIndex NOTIFY colorSchemeChanged)
     Q_PROPERTY(bool scanningLeftovers READ scanningLeftovers NOTIFY leftoversChanged)
     Q_PROPERTY(QString leftoverError READ leftoverError NOTIFY leftoversChanged)
     Q_PROPERTY(QString remoteMessage READ remoteMessage NOTIFY remoteMessageChanged)
@@ -64,6 +68,9 @@ public:
     RemoteModel *remotes() const { return m_remotes; }
     LeftoverModel *leftovers() const { return m_leftovers; }
     bool loadingInstalled() const { return m_loadingInstalled; }
+    QAbstractItemModel *colorSchemes() const;
+    int colorSchemeIndex() const;
+    Q_INVOKABLE void setColorSchemeIndex(int row);
     bool scanningLeftovers() const { return m_scanningLeftovers; }
     QString leftoverError() const { return m_leftoverError; }
     QString remoteMessage() const { return m_remoteMessage; }
@@ -74,28 +81,23 @@ public:
     Q_INVOKABLE void refreshInstalled();
     Q_INVOKABLE void loadExplore();
     Q_INVOKABLE void loadCategory(const QString &category);
-    Q_INVOKABLE void openApp(const QString &appId);
+    Q_INVOKABLE void openApp(const QString &appId, const QString &ref = QString(), bool userInstallation = false);
     Q_INVOKABLE void installApp(const QString &appId);
-    Q_INVOKABLE void updateApp(const QString &appId);
-    // Update every app that has one available, one transaction after the next.
+    Q_INVOKABLE void updateApp(const QString &appId, const QString &ref = QString(), bool userInstallation = false);
     Q_INVOKABLE void updateAll();
-    // deleteData also removes ~/.var/app/<appId> once the app is gone.
-    Q_INVOKABLE void removeApp(const QString &appId, bool deleteData = false);
+    Q_INVOKABLE void removeApp(const QString &appId, bool deleteData = false, const QString &ref = QString(),
+                               bool userInstallation = false);
     Q_INVOKABLE void launchApp(const QString &appId);
     Q_INVOKABLE void dismissTransaction();
 
-    // Repositories (Flatpak remotes). A URL ending in .flatpakrepo is downloaded
-    // and used as the remote's description, which carries its GPG key.
     Q_INVOKABLE void refreshRemotes();
     Q_INVOKABLE void addRemote(const QString &name, const QString &url, bool user);
     Q_INVOKABLE void removeRemote(const QString &name, bool user);
     Q_INVOKABLE void setRemoteEnabled(const QString &name, bool user, bool enabled);
 
-    // Leftover data directories of uninstalled apps.
     Q_INVOKABLE void refreshLeftovers();
     Q_INVOKABLE void removeLeftover(const QString &path);
 
-    // Manually trigger the background update check (also runs on a timer).
     Q_INVOKABLE void checkForUpdates();
 
 Q_SIGNALS:
@@ -104,11 +106,13 @@ Q_SIGNALS:
     void categoryChanged();
     void currentTransactionChanged();
     void installedChanged();
+    void colorSchemeChanged();
     void leftoversChanged();
     void remoteMessageChanged();
 
 private:
-    void startTransaction(int kind, const QString &appId, bool deleteData = false);
+    void startTransaction(int kind, const QString &appId, bool deleteData = false, const QString &ref = QString(),
+                          bool userInstallation = false);
     void startNextQueuedUpdate();
     bool beginRemoteOperation();
     void runRemoteOperation(bool user, std::function<RemoteOpResult(FlatpakInstallation *)> operation);
@@ -118,6 +122,7 @@ private:
     void notifyUpdates(int count);
     void applyInstalledLists(const InstalledLists &lists);
     void applyVerifiedApps();
+    void setUpColorSchemes();
 
     FlatpakManager *m_flatpak = nullptr;
     EntryModel *m_search = nullptr;
@@ -144,7 +149,7 @@ private:
     bool m_categoryLoading = false;
 
     QTimer *m_updateTimer = nullptr;
-    QStringList m_updateQueue;
+    QList<EntryData> m_updateQueue;
     int m_lastNotifiedUpdates = -1;
     bool m_loadingInstalled = false;
     bool m_installedRefreshQueued = false;
@@ -154,6 +159,7 @@ private:
     QString m_leftoverError;
 
     QNetworkAccessManager *m_nam = nullptr;
+    QSortFilterProxyModel *m_colorSchemes = nullptr;
     QString m_remoteMessage;
     bool m_remoteBusy = false;
     bool m_remoteSucceeded = false;

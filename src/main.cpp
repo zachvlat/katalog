@@ -1,17 +1,31 @@
-#include <QGuiApplication>
+#include <QApplication>
+#include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
-#include <QIcon>
+#include <QQuickStyle>
+
+#ifdef HAVE_KICONTHEMES
+#include <KIconTheme>
+#endif
+
 #include "backend.h"
 
 int main(int argc, char *argv[])
 {
-    QGuiApplication app(argc, argv);
+#ifdef HAVE_KICONTHEMES
+    KIconTheme::initTheme();
+#endif
+
+    QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("QuteStore"));
     app.setOrganizationName(QStringLiteral("io.github.zachvlat"));
     app.setApplicationDisplayName(QStringLiteral("Qute Store"));
     app.setDesktopFileName(QStringLiteral("io.github.zachvlat.qutestore"));
     app.setWindowIcon(QIcon::fromTheme(QStringLiteral("io.github.zachvlat.qutestore")));
+
+    QApplication::setStyle(QStringLiteral("breeze"));
+    if (qEnvironmentVariableIsEmpty("QT_QUICK_CONTROLS_STYLE"))
+        QQuickStyle::setStyle(QStringLiteral("org.kde.desktop"));
 
     QQmlApplicationEngine engine;
     Backend backend;

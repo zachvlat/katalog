@@ -10,8 +10,6 @@ Kirigami.ApplicationWindow {
     height: 800
     title: qsTr("Qute Store")
 
-    // Padding around the contents of every app tile, and the resulting tile
-    // height: one icon tall plus the padding, so the row layout stays compact.
     readonly property real tilePadding: Kirigami.Units.largeSpacing * 2
     readonly property real tileHeight: Kirigami.Units.iconSizes.huge + tilePadding * 2
 
@@ -20,22 +18,15 @@ Kirigami.ApplicationWindow {
     Component.onCompleted: {
         backend.loadExplore()
 
-        // By default a pushed page becomes a second column beside the current
-        // one (the panel is split in two). Single column mode makes the new page
-        // take the panel over instead, exactly like a category does, while
-        // keeping the previous page alive behind it.
         if (pageStack.columnView)
             pageStack.columnView.columnResizeMode = KL.ColumnView.SingleColumn
 
-        // The detail page ships its own labelled back action, so there is no
-        // need for the icon-only navigation buttons as well.
         if (pageStack.globalToolBar)
             pageStack.globalToolBar.showNavigationButtons = Kirigami.ApplicationHeaderStyle.NoNavigationButtons
     }
 
-    function openDetails(appId) {
-        backend.openApp(appId)
-        // Drop a previously opened detail so pages never pile up in the stack.
+    function openDetails(appId, ref, userInstallation) {
+        backend.openApp(appId, ref ? ref : "", userInstallation === true)
         while (pageStack.depth > 1)
             pageStack.pop()
         const detail = pageStack.push(appDetailComponent)
@@ -44,7 +35,6 @@ Kirigami.ApplicationWindow {
     }
 
     function closeDetails() {
-        // Remove the detail page; the previous page slides back in.
         if (pageStack.depth > 1)
             pageStack.pop()
     }
@@ -53,8 +43,6 @@ Kirigami.ApplicationWindow {
         backend.loadCategory(categoryId)
         while (pageStack.depth > 1)
             pageStack.pop()
-        // Replace the main-screen page so the category takes over the right panel
-        // instead of appearing as a column beside the previous page.
         pageStack.replace(categoryPageComponent, { "title": title, "categoryTitle": title })
     }
 
@@ -65,7 +53,6 @@ Kirigami.ApplicationWindow {
             pageStack.replace(page)
     }
 
-    // Ctrl+F opens the search screen and focuses its field.
     Shortcut {
         sequence: StandardKey.Find
         onActivated: {
@@ -107,9 +94,6 @@ Kirigami.ApplicationWindow {
 
     pageStack.leftSidebar: sidebar
 
-    // A sidebar row with an explicit icon and label. The Breeze QQC2 style's own
-    // ItemDelegate icon ends up with no source and a zero size here, so the row
-    // builds its content itself.
     component SidebarRow: ItemDelegate {
         id: control
         property string iconName
@@ -178,6 +162,11 @@ Kirigami.ApplicationWindow {
                 iconName: "trash-empty"
                 onClicked: window.navigateTo(leftoverPage)
             },
+            SidebarRow {
+                text: qsTr("Settings")
+                iconName: "settings-configure"
+                onClicked: window.navigateTo(settingsPage)
+            },
             Rectangle {
                 Layout.fillWidth: true
                 Layout.topMargin: Kirigami.Units.smallSpacing
@@ -222,7 +211,7 @@ Kirigami.ApplicationWindow {
 
             TapHandler {
                 cursorShape: Qt.PointingHandCursor
-                onTapped: window.openDetails(model.appId)
+                onTapped: window.openDetails(model.appId, model.ref, model.userInstallation)
             }
 
             contentItem: RowLayout {
@@ -231,7 +220,6 @@ Kirigami.ApplicationWindow {
                 Item {
                     id: iconBox
                     readonly property real iconSize: Kirigami.Units.iconSizes.huge
-                    // AppStream may return either an icon URL or a themed name.
                     readonly property string iconSource: model.icon ? model.icon : ""
                     readonly property bool iconIsUrl: iconSource.indexOf("://") !== -1
                     Layout.preferredWidth: iconSize
@@ -249,8 +237,6 @@ Kirigami.ApplicationWindow {
                         fillMode: Image.PreserveAspectFit
                         visible: parent.iconIsUrl && status === Image.Ready
                     }
-                    // Covers the themed-name case, and keeps the tile from going
-                    // blank while a URL loads or when it fails to load.
                     Kirigami.Icon {
                         anchors.centerIn: parent
                         visible: !tileImage.visible
@@ -321,8 +307,6 @@ Kirigami.ApplicationWindow {
                     }
                 }
 
-                // The Flathub-curated rows (Trending, Most Popular, New, Updated)
-                // appear first, in that order. The category rows follow.
                 Repeater {
                     model: backend.exploreCurated
                     delegate: Column {
@@ -430,12 +414,11 @@ Kirigami.ApplicationWindow {
 
     Component {
         id: updatesPage
-        Kirigami.Page {
+        Kirigami.ScrollablePage {
+            id: updatesRoot
             title: qsTr("Updates")
             Component.onCompleted: backend.refreshInstalled()
 
-            // Update every pending app in one go; the updates run one
-            // transaction after the next (see Backend::updateAll).
             actions: [
                 Kirigami.Action {
                     text: qsTr("Update All")
@@ -448,7 +431,7 @@ Kirigami.ApplicationWindow {
             ]
 
             Column {
-                anchors.fill: parent
+                width: updatesRoot.width
                 spacing: Kirigami.Units.largeSpacing
 
                 Column {
@@ -458,7 +441,7 @@ Kirigami.ApplicationWindow {
                     Kirigami.Heading { text: qsTr("Applications"); level: 2 }
                     GridView {
                         width: parent.width
-                        height: backend.updatesApps ? Math.ceil(backend.updatesApps.count / Math.floor(width / cellWidth)) * cellHeight : 0
+                        height: backend.updatesApps ? Math.ceil(backend.updatesApps.count / Math.max(1, Math.floor(width / cellWidth))) * cellHeight : 0
                         clip: true
                         interactive: false
                         cellWidth: Kirigami.Units.gridUnit * 13
@@ -475,7 +458,7 @@ Kirigami.ApplicationWindow {
                     Kirigami.Heading { text: qsTr("Runtimes"); level: 2 }
                     GridView {
                         width: parent.width
-                        height: backend.updatesRuntimes ? Math.ceil(backend.updatesRuntimes.count / Math.floor(width / cellWidth)) * cellHeight : 0
+                        height: backend.updatesRuntimes ? Math.ceil(backend.updatesRuntimes.count / Math.max(1, Math.floor(width / cellWidth))) * cellHeight : 0
                         clip: true
                         interactive: false
                         cellWidth: Kirigami.Units.gridUnit * 13
@@ -484,19 +467,19 @@ Kirigami.ApplicationWindow {
                         delegate: exploreTile
                     }
                 }
-            }
 
-            Label {
-                anchors.centerIn: parent
-                visible: !backend.loadingInstalled && (backend.updatesApps ? backend.updatesApps.count === 0 : true) && (backend.updatesRuntimes ? backend.updatesRuntimes.count === 0 : true)
-                text: qsTr("All quiet here…")
-                opacity: 0.7
-                font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.3
-            }
-            BusyIndicator {
-                anchors.centerIn: parent
-                running: backend.loadingInstalled && backend.updates.count === 0
-                visible: running
+                Label {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    visible: !backend.loadingInstalled && (backend.updatesApps ? backend.updatesApps.count === 0 : true) && (backend.updatesRuntimes ? backend.updatesRuntimes.count === 0 : true)
+                    text: qsTr("All quiet here…")
+                    opacity: 0.7
+                    font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.3
+                }
+                BusyIndicator {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    running: backend.loadingInstalled && backend.updates.count === 0
+                    visible: running
+                }
             }
         }
     }
@@ -567,6 +550,11 @@ Kirigami.ApplicationWindow {
     Component {
         id: leftoverPage
         LeftoverPage {}
+    }
+
+    Component {
+        id: settingsPage
+        SettingsPage {}
     }
 
     pageStack.initialPage: explorePage

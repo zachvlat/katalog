@@ -36,7 +36,7 @@ Kirigami.ScrollablePage {
             }
             GridView {
                 Layout.fillWidth: true
-                Layout.preferredHeight: backend.installedApps ? Math.ceil(backend.installedApps.count / Math.floor(width / cellWidth)) * cellHeight : 0
+                Layout.preferredHeight: backend.installedApps ? Math.ceil(backend.installedApps.count / Math.max(1, Math.floor(width / cellWidth))) * cellHeight : 0
                 visible: backend.installedApps && backend.installedApps.count > 0
                 clip: true
                 interactive: false
@@ -57,7 +57,7 @@ Kirigami.ScrollablePage {
             }
             GridView {
                 Layout.fillWidth: true
-                Layout.preferredHeight: backend.installedRuntimes ? Math.ceil(backend.installedRuntimes.count / Math.floor(width / cellWidth)) * cellHeight : 0
+                Layout.preferredHeight: backend.installedRuntimes ? Math.ceil(backend.installedRuntimes.count / Math.max(1, Math.floor(width / cellWidth))) * cellHeight : 0
                 visible: backend.installedRuntimes && backend.installedRuntimes.count > 0
                 clip: true
                 interactive: false
