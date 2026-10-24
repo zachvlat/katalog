@@ -425,29 +425,7 @@ Kirigami.ApplicationWindow {
 
     Component {
         id: installedPage
-        Kirigami.Page {
-            title: qsTr("Installed")
-            Component.onCompleted: backend.refreshInstalled()
-            GridView {
-                anchors.fill: parent
-                clip: true
-                cellWidth: Kirigami.Units.gridUnit * 13
-                cellHeight: window.tileHeight + Kirigami.Units.gridUnit
-                model: backend.installedApps
-                delegate: exploreTile
-            }
-            Label {
-                anchors.centerIn: parent
-                visible: !backend.loadingInstalled && backend.installedApps.count === 0
-                text: qsTr("Nothing installed yet.")
-                opacity: 0.7
-            }
-            BusyIndicator {
-                anchors.centerIn: parent
-                running: backend.loadingInstalled && backend.installedApps.count === 0
-                visible: running
-            }
-        }
+        InstalledPage {}
     }
 
     Component {
@@ -469,17 +447,48 @@ Kirigami.ApplicationWindow {
                 }
             ]
 
-            GridView {
+            Column {
                 anchors.fill: parent
-                clip: true
-                cellWidth: Kirigami.Units.gridUnit * 13
-                cellHeight: window.tileHeight + Kirigami.Units.gridUnit
-                model: backend.updates
-                delegate: exploreTile
+                spacing: Kirigami.Units.largeSpacing
+
+                Column {
+                    width: parent.width
+                    spacing: Kirigami.Units.smallSpacing
+                    visible: backend.updatesApps && backend.updatesApps.count > 0
+                    Kirigami.Heading { text: qsTr("Applications"); level: 2 }
+                    GridView {
+                        width: parent.width
+                        height: backend.updatesApps ? Math.ceil(backend.updatesApps.count / Math.floor(width / cellWidth)) * cellHeight : 0
+                        clip: true
+                        interactive: false
+                        cellWidth: Kirigami.Units.gridUnit * 13
+                        cellHeight: window.tileHeight + Kirigami.Units.gridUnit
+                        model: backend.updatesApps
+                        delegate: exploreTile
+                    }
+                }
+
+                Column {
+                    width: parent.width
+                    spacing: Kirigami.Units.smallSpacing
+                    visible: backend.updatesRuntimes && backend.updatesRuntimes.count > 0
+                    Kirigami.Heading { text: qsTr("Runtimes"); level: 2 }
+                    GridView {
+                        width: parent.width
+                        height: backend.updatesRuntimes ? Math.ceil(backend.updatesRuntimes.count / Math.floor(width / cellWidth)) * cellHeight : 0
+                        clip: true
+                        interactive: false
+                        cellWidth: Kirigami.Units.gridUnit * 13
+                        cellHeight: window.tileHeight + Kirigami.Units.gridUnit
+                        model: backend.updatesRuntimes
+                        delegate: exploreTile
+                    }
+                }
             }
+
             Label {
                 anchors.centerIn: parent
-                visible: !backend.loadingInstalled && backend.updates.count === 0
+                visible: !backend.loadingInstalled && (backend.updatesApps ? backend.updatesApps.count === 0 : true) && (backend.updatesRuntimes ? backend.updatesRuntimes.count === 0 : true)
                 text: qsTr("All quiet here…")
                 opacity: 0.7
                 font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.3

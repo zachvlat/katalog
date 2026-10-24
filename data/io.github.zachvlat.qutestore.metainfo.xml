@@ -32,6 +32,12 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.0.3" date="2026-10-24">
+      <description>
+        <p>Include runtime updates in the Updates list and allow updating or
+        managing runtimes.</p>
+      </description>
+    </release>
     <release version="1.0.2" date="2026-10-19">
       <description>
         <p>Show Flathub "Verified" badges on app cards and details, add a KDE

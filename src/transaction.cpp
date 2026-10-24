@@ -28,7 +28,8 @@ FlatpakRef *findAppRef(GPtrArray *refs, const QString &appId)
 
     for (guint i = 0; i < refs->len; ++i) {
         auto *ref = FLATPAK_REF(g_ptr_array_index(refs, i));
-        if (flatpak_ref_get_kind(ref) != FLATPAK_REF_KIND_APP)
+        const auto kind = flatpak_ref_get_kind(ref);
+        if (kind != FLATPAK_REF_KIND_APP && kind != FLATPAK_REF_KIND_RUNTIME)
             continue;
         if (wanted == QString::fromUtf8(flatpak_ref_get_name(ref)))
             return ref;
@@ -39,6 +40,7 @@ FlatpakRef *findAppRef(GPtrArray *refs, const QString &appId)
 bool resolveOperation(FlatpakManager *manager, Transaction::Kind kind, const QString &appId,
                       ResolvedOperation &out)
 {
+    qWarning() << "resolveOperation" << kind << appId;
     QList<FlatpakInstallation *> installations;
     if (auto *system = manager->systemInstallation())
         installations << system;
@@ -54,6 +56,7 @@ bool resolveOperation(FlatpakManager *manager, Transaction::Kind kind, const QSt
             g_autofree char *formatted = flatpak_ref_format_ref(ref);
             out.installation = installation;
             out.installedRef = QString::fromUtf8(formatted);
+            qWarning() << "resolved installed" << out.installedRef;
             break;
         }
     }
@@ -208,8 +211,10 @@ void Transaction::runWorker()
 
             gboolean added = FALSE;
             if (m_kind == Remove) {
+                qWarning() << "Adding uninstall for" << resolved.installedRef;
                 added = flatpak_transaction_add_uninstall(txn, resolved.installedRef.toUtf8().constData(), &error);
             } else if (m_kind == Update || !resolved.installedRef.isEmpty()) {
+                qWarning() << "Adding update for" << resolved.installedRef;
                 added = flatpak_transaction_add_update(txn, resolved.installedRef.toUtf8().constData(),
                                                        nullptr, nullptr, &error);
             } else {
@@ -221,11 +226,14 @@ void Transaction::runWorker()
                 errorMessage = QString::fromUtf8(error ? error->message : "Could not add operation");
                 g_clear_error(&error);
             } else {
+                qWarning() << "About to run transaction";
                 success = flatpak_transaction_run(txn, nullptr, &error);
+                qWarning() << "Transaction run done, success:" << success;
                 if (!success) {
                     errorMessage = !m_pendingError.isEmpty()
                                        ? m_pendingError
                                        : QString::fromUtf8(error ? error->message : "Transaction failed");
+                    qWarning() << "Transaction failed:" << errorMessage;
                     g_clear_error(&error);
                 }
             }

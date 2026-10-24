@@ -862,7 +862,8 @@ void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailD
             continue;
         for (guint i = 0; i < refs->len; ++i) {
             auto *ref = FLATPAK_INSTALLED_REF(g_ptr_array_index(refs, i));
-            if (flatpak_ref_get_kind(FLATPAK_REF(ref)) != FLATPAK_REF_KIND_APP)
+            const auto kind = flatpak_ref_get_kind(FLATPAK_REF(ref));
+            if (kind != FLATPAK_REF_KIND_APP && kind != FLATPAK_REF_KIND_RUNTIME)
                 continue;
             if (refId == QString::fromUtf8(flatpak_ref_get_name(FLATPAK_REF(ref)))) {
                 // Hand the real ref name to the UI so install/launch/remove all
@@ -891,7 +892,8 @@ void enrichFromFlatpak(FlatpakManager *manager, const QString &appId, AppDetailD
             }
             for (guint j = 0; j < refs->len; ++j) {
                 auto *ref = FLATPAK_REF(g_ptr_array_index(refs, j));
-                if (flatpak_ref_get_kind(ref) != FLATPAK_REF_KIND_APP)
+                const auto kind = flatpak_ref_get_kind(ref);
+                if (kind != FLATPAK_REF_KIND_APP && kind != FLATPAK_REF_KIND_RUNTIME)
                     continue;
                 if (refId == QString::fromUtf8(flatpak_ref_get_name(ref))) {
                     data.appId = refId;
@@ -1077,7 +1079,10 @@ Backend::Backend(QObject *parent)
     m_flatpak = new FlatpakManager(this);
     m_search = new EntryModel(this);
     m_installed = new EntryModel(this);
+    m_installedRuntimes = new EntryModel(this);
     m_updates = new EntryModel(this);
+    m_updatesApps = new EntryModel(this);
+    m_updatesRuntimes = new EntryModel(this);
     m_category = new EntryModel(this);
     m_details = new Details(this);
     m_remotes = new RemoteModel(this);
@@ -1269,7 +1274,8 @@ InstalledLists loadInstalledLists(FlatpakManager *manager)
         if (installed) {
             for (guint i = 0; i < installed->len; ++i) {
                 auto *ref = FLATPAK_REF(g_ptr_array_index(installed, i));
-                if (flatpak_ref_get_kind(ref) != FLATPAK_REF_KIND_APP)
+                const auto kind = flatpak_ref_get_kind(ref);
+                if (kind != FLATPAK_REF_KIND_APP && kind != FLATPAK_REF_KIND_RUNTIME)
                     continue;
                 const QString name = QString::fromUtf8(flatpak_ref_get_name(ref));
                 if (seen.contains(name))
@@ -1279,6 +1285,7 @@ InstalledLists loadInstalledLists(FlatpakManager *manager)
                 entry.name = installedDisplayName(ref);
                 if (FLATPAK_IS_INSTALLED_REF(ref))
                     entry.icon = deploymentIconUrl(FLATPAK_INSTALLED_REF(ref), name);
+                entry.kind = (kind == FLATPAK_REF_KIND_RUNTIME) ? 1 : 0;
                 lists.installed.append(entry);
             }
         }
@@ -1288,7 +1295,8 @@ InstalledLists loadInstalledLists(FlatpakManager *manager)
         if (forUpdate) {
             for (guint i = 0; i < forUpdate->len; ++i) {
                 auto *ref = FLATPAK_REF(g_ptr_array_index(forUpdate, i));
-                if (flatpak_ref_get_kind(ref) != FLATPAK_REF_KIND_APP)
+                const auto kind = flatpak_ref_get_kind(ref);
+                if (kind != FLATPAK_REF_KIND_APP && kind != FLATPAK_REF_KIND_RUNTIME)
                     continue;
                 const QString name = QString::fromUtf8(flatpak_ref_get_name(ref));
                 if (updateIds.contains(name))
@@ -1298,6 +1306,7 @@ InstalledLists loadInstalledLists(FlatpakManager *manager)
                 entry.name = installedDisplayName(ref);
                 if (FLATPAK_IS_INSTALLED_REF(ref))
                     entry.icon = deploymentIconUrl(FLATPAK_INSTALLED_REF(ref), name);
+                entry.kind = (kind == FLATPAK_REF_KIND_RUNTIME) ? 1 : 0;
                 lists.updates.append(entry);
             }
         }
@@ -1335,8 +1344,23 @@ void Backend::applyInstalledLists(const InstalledLists &lists)
     QList<EntryData> updates = lists.updates;
     for (EntryData &entry : updates)
         entry.verified = verified.contains(entry.appId);
+
+    QList<EntryData> installedApps, installedRuntimes;
+    for (const auto &e : installed) {
+        if (e.kind == 1) installedRuntimes.append(e);
+        else installedApps.append(e);
+    }
+    QList<EntryData> updatesApps, updatesRuntimes;
+    for (const auto &e : updates) {
+        if (e.kind == 1) updatesRuntimes.append(e);
+        else updatesApps.append(e);
+    }
+
     m_installed->setEntries(installed);
+    m_installedRuntimes->setEntries(installedRuntimes);
     m_updates->setEntries(updates);
+    m_updatesApps->setEntries(updatesApps);
+    m_updatesRuntimes->setEntries(updatesRuntimes);
     m_loadingInstalled = false;
     Q_EMIT installedChanged();
 
@@ -1516,6 +1540,7 @@ void Backend::installApp(const QString &appId)
 
 void Backend::updateApp(const QString &appId)
 {
+    qWarning() << "Backend::updateApp called for" << appId;
     m_updateQueue.clear();
     startTransaction(Transaction::Update, appId);
 }
@@ -1583,7 +1608,7 @@ void Backend::startTransaction(int kind, const QString &appId, bool deleteData)
     m_transaction = transaction;
     Q_EMIT currentTransactionChanged();
 
-    connect(transaction, &Transaction::completed, this, &Backend::refreshInstalled);
+    connect(transaction, &Transaction::completed, this, [this]() { qWarning() << "Transaction completed, refreshing"; refreshInstalled(); });
     connect(transaction, &Transaction::completed, this, [this, appId, deleteData]() {
         // The user's data is only deleted when they explicitly asked for it in
         // the removal dialog, like `flatpak uninstall --delete-data`.

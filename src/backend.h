@@ -23,7 +23,10 @@ class Backend : public QObject {
     Q_PROPERTY(FlatpakManager *flatpakInstance READ flatpakInstance CONSTANT)
     Q_PROPERTY(EntryModel *searchResults READ searchResults CONSTANT)
     Q_PROPERTY(EntryModel *installedApps READ installedApps CONSTANT)
+    Q_PROPERTY(EntryModel *installedRuntimes READ installedRuntimes CONSTANT)
     Q_PROPERTY(EntryModel *updates READ updates CONSTANT)
+    Q_PROPERTY(EntryModel *updatesApps READ updatesApps CONSTANT)
+    Q_PROPERTY(EntryModel *updatesRuntimes READ updatesRuntimes CONSTANT)
     Q_PROPERTY(QVariantList exploreCurated READ exploreCurated NOTIFY exploreChanged)
     Q_PROPERTY(QVariantList exploreSections READ exploreSections NOTIFY exploreChanged)
     Q_PROPERTY(bool exploring READ exploring NOTIFY exploreChanged)
@@ -46,7 +49,10 @@ public:
     FlatpakManager *flatpakInstance() const { return m_flatpak; }
     EntryModel *searchResults() const { return m_search; }
     EntryModel *installedApps() const { return m_installed; }
+    EntryModel *installedRuntimes() const { return m_installedRuntimes; }
     EntryModel *updates() const { return m_updates; }
+    EntryModel *updatesApps() const { return m_updatesApps; }
+    EntryModel *updatesRuntimes() const { return m_updatesRuntimes; }
     QVariantList exploreCurated() const { return m_exploreCurated; }
     QVariantList exploreSections() const { return m_exploreSections; }
     bool exploring() const { return m_exploring; }
@@ -116,7 +122,10 @@ private:
     FlatpakManager *m_flatpak = nullptr;
     EntryModel *m_search = nullptr;
     EntryModel *m_installed = nullptr;
+    EntryModel *m_installedRuntimes = nullptr;
     EntryModel *m_updates = nullptr;
+    EntryModel *m_updatesApps = nullptr;
+    EntryModel *m_updatesRuntimes = nullptr;
     EntryModel *m_category = nullptr;
     Details *m_details = nullptr;
     Transaction *m_transaction = nullptr;

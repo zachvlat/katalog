@@ -23,6 +23,7 @@ QVariant EntryModel::data(const QModelIndex &index, int role) const
     case IconRole: return e.icon;
     case InstalledRole: return e.installed;
     case VerifiedRole: return e.verified;
+    case KindRole: return e.kind;
     }
     return QVariant();
 }
@@ -35,7 +36,8 @@ QHash<int, QByteArray> EntryModel::roleNames() const
         {SummaryRole, "summary"},
         {IconRole, "icon"},
         {InstalledRole, "installed"},
-        {VerifiedRole, "verified"}
+        {VerifiedRole, "verified"},
+        {KindRole, "kind"}
     };
 }
 

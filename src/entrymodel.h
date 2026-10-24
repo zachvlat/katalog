@@ -12,6 +12,7 @@ struct EntryData {
     QString icon;
     bool installed = false;
     bool verified = false;
+    int kind = 0; // 0 = app, 1 = runtime, 2 = other/extension
 };
 
 // A titled group of entries, as shown on the Explore page.
@@ -42,7 +43,7 @@ class EntryModel : public QAbstractListModel {
     // Row count for QML bindings (C++ models have no built-in "count").
     Q_PROPERTY(int count READ rowCount NOTIFY countChanged)
 public:
-    enum Roles { AppIdRole = Qt::UserRole + 1, NameRole, SummaryRole, IconRole, InstalledRole, VerifiedRole };
+    enum Roles { AppIdRole = Qt::UserRole + 1, NameRole, SummaryRole, IconRole, InstalledRole, VerifiedRole, KindRole };
 
     explicit EntryModel(QObject *parent = nullptr);
 
