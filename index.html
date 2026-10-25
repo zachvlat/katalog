@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qute Store - Flatpak Store for KDE Plasma</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0f172a;
+  --panel: #1e293b;
+  --accent: #8b5cf6;
+  --accent-glow: rgba(139, 92, 246, 0.4);
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --border: #334155;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+a { color: inherit; text-decoration: none; }
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+header {
+  position: relative;
+  padding: 6rem 0 4rem;
+  overflow: hidden;
+}
+
+header::before {
+  content: "";
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle at 30% 30%, var(--accent-glow), transparent 50%),
+              radial-gradient(circle at 70% 70%, rgba(59, 130, 246, 0.2), transparent 50%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+header .container {
+  position: relative;
+  z-index: 1;
+}
+
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-bottom: 2rem;
+}
+
+.logo-mark {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.75rem;
+  background: linear-gradient(135deg, var(--accent), #4f46e5);
+  box-shadow: 0 0 20px var(--accent-glow);
+}
+
+h1 {
+  font-size: 3.5rem;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+  margin-bottom: 1.5rem;
+}
+
+h1 .gradient {
+  background: linear-gradient(135deg, #fff 0%, var(--accent) 60%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.subtitle {
+  font-size: 1.25rem;
+  color: var(--muted);
+  max-width: 60ch;
+  margin-bottom: 2.5rem;
+}
+
+.cta-group {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.875rem 1.75rem;
+  border-radius: 0.75rem;
+  font-weight: 700;
+  font-size: 1rem;
+  transition: transform 0.2s, box-shadow 0.2s;
+  border: 1px solid transparent;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 10px 25px -5px var(--accent-glow);
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 15px 30px -5px var(--accent-glow);
+}
+
+.btn-ghost {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-ghost:hover {
+  background: #334155;
+}
+
+.nav {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding: 1rem 0;
+  z-index: 100;
+  background: rgba(15, 23, 42, 0.6);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.nav .container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-links {
+  display: flex;
+  gap: 2rem;
+  list-style: none;
+}
+
+.nav-links a {
+  color: var(--muted);
+  font-size: 0.95rem;
+  font-weight: 600;
+  transition: color 0.2s;
+}
+
+.nav-links a:hover {
+  color: var(--text);
+}
+
+.section {
+  padding: 5rem 0;
+}
+
+.section-title {
+  font-size: 2.5rem;
+  font-weight: 900;
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.section-subtitle {
+  text-align: center;
+  color: var(--muted);
+  max-width: 60ch;
+  margin: 0 auto 3rem;
+}
+
+.features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+}
+
+.feature-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 2rem;
+  transition: transform 0.2s, border-color 0.2s;
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--accent);
+}
+
+.feature-icon {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.75rem;
+  background: rgba(139, 92, 246, 0.15);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.feature-card h3 {
+  font-size: 1.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.feature-card p {
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1.5rem;
+}
+
+.app-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  overflow: hidden;
+  transition: transform 0.2s, border-color 0.2s;
+}
+
+.app-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--accent);
+}
+
+.app-thumb {
+  height: 14rem;
+  background: linear-gradient(135deg, #334155, #1e293b);
+  position: relative;
+  overflow: hidden;
+}
+
+.app-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, transparent 0%, rgba(139, 92, 246, 0.2) 100%);
+}
+
+.app-badge {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.app-info {
+  padding: 1.5rem;
+}
+
+.app-info h3 {
+  font-size: 1.125rem;
+  margin-bottom: 0.5rem;
+}
+
+.app-info p {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+}
+
+.app-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.install-section {
+  background: var(--panel);
+  border-radius: 1.5rem;
+  border: 1px solid var(--border);
+  padding: 4rem 2rem;
+  text-align: center;
+}
+
+.install-section h2 {
+  font-size: 2.25rem;
+  margin-bottom: 1rem;
+}
+
+.install-code {
+  background: #020617;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1.5rem;
+  margin: 2rem 0;
+  overflow-x: auto;
+  text-align: left;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9rem;
+  color: #cbd5e1;
+}
+
+.install-code span {
+  color: var(--accent);
+}
+
+.install-hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: center;
+  margin-top: 2rem;
+}
+
+.stack-tag {
+  background: rgba(139, 92, 246, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+footer {
+  border-top: 1px solid var(--border);
+  padding: 3rem 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 640px) {
+  h1 { font-size: 2.25rem; }
+  .nav-links { display: none; }
+  header { padding: 4rem 0 3rem; }
+}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="container">
+    <div class="logo" style="margin:0;">Q<span style="color:var(--accent)">ute</span> Store</div>
+    <ul class="nav-links">
+      <li><a href="#features">Features</a></li>
+      <li><a href="#apps">Apps</a></li>
+      <li><a href="#install">Install</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header>
+  <div class="container">
+    <div class="logo">
+      <div class="logo-mark">Q</div>
+      <div>Qute<span style="color:var(--accent)"> Store</span></div>
+    </div>
+    <h1>The Flatpak store <span class="gradient">for KDE Plasma</span></h1>
+    <p class="subtitle">A native Kirigami port of a Flatpak store, built with Qt 6. Browse, install, and update your Flatpak applications with a clean, KDE-native interface.</p>
+    <div class="cta-group">
+      <a href="#install" class="btn btn-primary">Install Qute Store</a>
+      <a href="https://github.com/zachvlat/qutestore" class="btn btn-ghost">View on GitHub</a>
+    </div>
+  </div>
+</header>
+
+<section class="section" id="features">
+  <h2 class="section-title">Built for KDE</h2>
+  <p class="section-subtitle">A native desktop experience that feels at home on Plasma, powered by Qt 6 and Kirigami.</p>
+  <div class="features">
+    <div class="feature-card">
+      <div class="feature-icon">&#128206;</div>
+      <h3>Flatpak native</h3>
+      <p>Install and manage Flatpak applications and runtimes directly from your desktop.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128274;</div>
+      <h3>One-click updates</h3>
+      <p>Keep all your installed apps and runtimes up to date with a single action.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128204;</div>
+      <h3>Verified apps</h3>
+      <p>Trusted publisher badges help you identify verified and safe applications.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128473;</div>
+      <h3>Leftover cleanup</h3>
+      <p>Find and remove leftover files from uninstalled Flatpak applications.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128200;</div>
+      <h3>Repository manager</h3>
+      <p>Add, remove, and configure Flatpak remotes from a simple interface.</p>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">&#128295;</div>
+      <h3>Search &amp; explore</h3>
+      <p>Browse curated categories or search for the app you need.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="apps">
+  <h2 class="section-title">Explore applications</h2>
+  <p class="section-subtitle">Curated categories of apps ready to install on your KDE system.</p>
+  <div class="apps-grid">
+    <div class="app-card">
+      <div class="app-thumb"></div>
+      <div class="app-info">
+        <h3>Kdenlive</h3>
+        <p>Professional video editing suite with multi-track editing and effects.</p>
+        <div class="app-meta"><span>Video</span><span>&#10003; Verified</span></div>
+      </div>
+    </div>
+    <div class="app-card">
+      <div class="app-thumb"></div>
+      <div class="app-info">
+        <h3>GIMP</h3>
+        <p>GNU Image Manipulation Program for advanced raster graphics editing.</p>
+        <div class="app-meta"><span>Graphics</span><span>&#10003; Verified</span></div>
+      </div>
+    </div>
+    <div class="app-card">
+      <div class="app-thumb"></div>
+      <div class="app-info">
+        <h3>OBS Studio</h3>
+        <p>Free and open source software for video recording and live streaming.</p>
+        <div class="app-meta"><span>Video</span><span>&#10003; Verified</span></div>
+      </div>
+    </div>
+    <div class="app-card">
+      <div class="app-thumb"></div>
+      <div class="app-info">
+        <h3>VLC</h3>
+        <p>Cross-platform multimedia player that plays most media files and streams.</p>
+        <div class="app-meta"><span>Media</span><span>&#10003; Verified</span></div>
+      </div>
+    </div>
+    <div class="app-card">
+      <div class="app-thumb"></div>
+      <div class="app-info">
+        <h3>Blender</h3>
+        <p>Free and open source 3D creation suite for modeling, animation, and rendering.</p>
+        <div class="app-meta"><span>3D</span><span>&#10003; Verified</span></div>
+      </div>
+    </div>
+    <div class="app-card">
+      <div class="app-thumb"></div>
+      <div class="app-info">
+        <h3>Inkscape</h3>
+        <p>Professional vector graphics editor for illustrations and diagrams.</p>
+        <div class="app-meta"><span>Graphics</span><span>&#10003; Verified</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section install-section" id="install">
+  <h2>Install Qute Store</h2>
+  <p style="color:var(--muted); max-width: 60ch; margin: 0 auto 2rem;">Get Qute Store running on your KDE Plasma system via Flatpak.</p>
+  <div class="install-code">
+    flatpak install <span>io.github.zachvlat.qutestore.flatpak</span>
+  </div>
+  <p class="install-hint">Or install system-wide with <code>sudo flatpak install --system io.github.zachvlat.qutestore.flatpak</code></p>
+  <div class="stack">
+    <span class="stack-tag">Qt 6</span>
+    <span class="stack-tag">Kirigami</span>
+    <span class="stack-tag">KDE Plasma</span>
+    <span class="stack-tag">Flatpak</span>
+  </div>
+</section>
+
+<footer>
+  <p>Qute Store &#183; io.github.zachvlat.qutestore &#183; v1.0.3</p>
+</footer>
+
+</body>
+</html>
