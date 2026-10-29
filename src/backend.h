@@ -11,6 +11,7 @@
 
 #include "details.h"
 #include "entrymodel.h"
+#include "flathubaccount.h"
 #include "flatpakinstance.h"
 #include "flathubclient.h"
 #include "leftovermodel.h"
@@ -44,6 +45,11 @@ class Backend : public QObject {
     Q_PROPERTY(int colorSchemeIndex READ colorSchemeIndex NOTIFY colorSchemeChanged)
     Q_PROPERTY(bool scanningLeftovers READ scanningLeftovers NOTIFY leftoversChanged)
     Q_PROPERTY(QString leftoverError READ leftoverError NOTIFY leftoversChanged)
+    Q_PROPERTY(FlathubAccount *flathubAccount READ flathubAccount CONSTANT)
+    Q_PROPERTY(EntryModel *bookmarks READ bookmarks CONSTANT)
+    Q_PROPERTY(bool bookmarksLoading READ bookmarksLoading NOTIFY bookmarksChanged)
+    Q_PROPERTY(QString bookmarksError READ bookmarksError NOTIFY bookmarksChanged)
+    Q_PROPERTY(int bookmarksToInstall READ bookmarksToInstall NOTIFY bookmarksChanged)
     Q_PROPERTY(QString remoteMessage READ remoteMessage NOTIFY remoteMessageChanged)
     Q_PROPERTY(bool remoteBusy READ remoteBusy NOTIFY remoteMessageChanged)
     Q_PROPERTY(bool remoteSucceeded READ remoteSucceeded NOTIFY remoteMessageChanged)
@@ -76,6 +82,11 @@ public:
     QString remoteMessage() const { return m_remoteMessage; }
     bool remoteBusy() const { return m_remoteBusy; }
     bool remoteSucceeded() const { return m_remoteSucceeded; }
+    FlathubAccount *flathubAccount() const { return m_account; }
+    EntryModel *bookmarks() const { return m_bookmarks; }
+    bool bookmarksLoading() const { return m_bookmarksLoading; }
+    QString bookmarksError() const { return m_bookmarksError; }
+    int bookmarksToInstall() const;
 
     Q_INVOKABLE void search(const QString &query);
     Q_INVOKABLE void refreshInstalled();
@@ -100,6 +111,9 @@ public:
 
     Q_INVOKABLE void checkForUpdates();
 
+    Q_INVOKABLE void loadBookmarks();
+    Q_INVOKABLE void installAllBookmarks();
+
 Q_SIGNALS:
     void searchingChanged();
     void exploreChanged();
@@ -109,11 +123,13 @@ Q_SIGNALS:
     void colorSchemeChanged();
     void leftoversChanged();
     void remoteMessageChanged();
+    void bookmarksChanged();
 
 private:
     void startTransaction(int kind, const QString &appId, bool deleteData = false, const QString &ref = QString(),
                           bool userInstallation = false);
-    void startNextQueuedUpdate();
+    void startNextQueued();
+    void onAccountStateChanged();
     bool beginRemoteOperation();
     void runRemoteOperation(bool user, std::function<RemoteOpResult(FlatpakInstallation *)> operation);
     void finishRemoteOperation(const RemoteOpResult &result);
@@ -137,6 +153,10 @@ private:
     RemoteModel *m_remotes = nullptr;
     LeftoverModel *m_leftovers = nullptr;
     FlathubClient *m_flathub = nullptr;
+    FlathubAccount *m_account = nullptr;
+    EntryModel *m_bookmarks = nullptr;
+    bool m_bookmarksLoading = false;
+    QString m_bookmarksError;
 
     QVariantList m_exploreCurated;
     QVariantList m_exploreSections;
@@ -149,7 +169,12 @@ private:
     bool m_categoryLoading = false;
 
     QTimer *m_updateTimer = nullptr;
-    QList<EntryData> m_updateQueue;
+    struct QueuedTransaction {
+        int kind;
+        EntryData entry;
+    };
+    QList<QueuedTransaction> m_queue;
+    bool m_queueContinuesOnError = false;
     int m_lastNotifiedUpdates = -1;
     bool m_loadingInstalled = false;
     bool m_installedRefreshQueued = false;
@@ -171,6 +196,7 @@ private:
     QFutureWatcher<LeftoverScan> *m_leftoverWatcher = nullptr;
     QFutureWatcher<InstalledLists> *m_installedWatcher = nullptr;
     QFutureWatcher<RemoteOpResult> *m_remoteWatcher = nullptr;
+    QFutureWatcher<QList<EntryData>> *m_bookmarksWatcher = nullptr;
     quint64 m_searchGeneration = 0;
     quint64 m_detailsGeneration = 0;
     quint64 m_categoryGeneration = 0;

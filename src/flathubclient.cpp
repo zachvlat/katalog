@@ -84,7 +84,7 @@ void FlathubClient::fetchExplore()
             QUrl(QStringLiteral("https://flathub.org/api/v2/") + QLatin1String(definition.path)));
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
         request.setTransferTimeout(15000);
-        request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("QuteStore/1.0"));
+        request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Katalog/1.0"));
 
         QNetworkReply *reply = m_nam->get(request);
         ++m_pending;
@@ -114,7 +114,7 @@ void FlathubClient::requestVerifiedPage(int page)
                  .arg(kVerifiedPageSize)));
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setTransferTimeout(15000);
-    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("QuteStore/1.0"));
+    request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Katalog/1.0"));
 
     QNetworkReply *reply = m_nam->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, page, reply]() { handleVerifiedPage(page, reply); });

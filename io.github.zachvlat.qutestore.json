@@ -1,5 +1,7 @@
 {
   "app-id": "io.github.zachvlat.qutestore",
+  "base": "io.qt.qtwebengine.BaseApp",
+  "base-version": "6.11",
   "runtime": "org.kde.Platform",
   "runtime-version": "6.11",
   "sdk": "org.kde.Sdk",
@@ -16,6 +18,9 @@
     "--filesystem=~/.var/app",
     "--talk-name=org.freedesktop.Flatpak",
     "--system-talk-name=org.freedesktop.Flatpak.SystemHelper"
+  ],
+  "cleanup-commands": [
+    "/app/cleanup-BaseApp.sh"
   ],
   "cleanup": [
     "/include",

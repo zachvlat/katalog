@@ -12,6 +12,7 @@ find_package(KF6I18n 6.0 QUIET)
 find_package(KF6Notifications 6.0 QUIET)
 find_package(KF6IconThemes 6.3 QUIET)
 find_package(KF6ColorScheme 6.6 QUIET)
+find_package(Qt6 6.6 QUIET OPTIONAL_COMPONENTS WebEngineQuick)
 
 if (NOT KF6Notifications_FOUND)
     find_package(KF6Notifications5 QUIET)
@@ -25,6 +26,7 @@ qt_add_executable(qutestore
     src/details.cpp
     src/transaction.cpp
     src/flathubclient.cpp
+    src/flathubaccount.cpp
     src/remotemodel.cpp
     src/leftovermodel.cpp
 )
@@ -113,6 +115,20 @@ if(GIO_LIBRARY)
     target_link_libraries(qutestore PRIVATE ${GIO_LIBRARY})
 endif()
 
+set(_qs_qml_files
+    qml/Main.qml
+    qml/AppDetailPage.qml
+    qml/RepositoriesPage.qml
+    qml/LeftoverPage.qml
+    qml/VerifiedBadge.qml
+    qml/InstalledPage.qml
+    qml/SettingsPage.qml)
+if(Qt6WebEngineQuick_FOUND)
+    target_compile_definitions(qutestore PRIVATE HAVE_WEBENGINE)
+    target_link_libraries(qutestore PRIVATE Qt6::WebEngineQuick)
+    list(APPEND _qs_qml_files qml/FlathubLoginPage.qml)
+endif()
+
 qt_add_qml_module(qutestore
     URI io.github.zachvlat.qutestore
     VERSION 1.0
@@ -121,13 +137,7 @@ qt_add_qml_module(qutestore
         src/remotemodel.cpp
         src/leftovermodel.cpp
     QML_FILES
-        qml/Main.qml
-        qml/AppDetailPage.qml
-        qml/RepositoriesPage.qml
-        qml/LeftoverPage.qml
-        qml/VerifiedBadge.qml
-        qml/InstalledPage.qml
-        qml/SettingsPage.qml
+        ${_qs_qml_files}
     NO_RESOURCE_TARGET_PATH
 )
 
@@ -147,6 +157,12 @@ target_link_libraries(qutestore PRIVATE
 install(TARGETS qutestore RUNTIME DESTINATION bin)
 install(FILES data/io.github.zachvlat.qutestore.desktop DESTINATION share/applications)
 install(FILES data/io.github.zachvlat.qutestore.metainfo.xml DESTINATION share/metainfo)
+install(FILES
+            data/color-schemes/KatalogNord.colors
+            data/color-schemes/KatalogGruvbox.colors
+            data/color-schemes/KatalogSweetMars.colors
+            data/color-schemes/KatalogCatppuccinMocha.colors
+        DESTINATION share/color-schemes)
 
 install(FILES data/icons/hicolor/scalable/apps/io.github.zachvlat.qutestore.svg
         DESTINATION share/icons/hicolor/scalable/apps)

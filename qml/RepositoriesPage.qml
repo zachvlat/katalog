@@ -7,7 +7,10 @@ Kirigami.ScrollablePage {
     id: reposPage
     title: qsTr("Repositories")
 
-    Component.onCompleted: backend.refreshRemotes()
+    Component.onCompleted: {
+        backend.refreshRemotes()
+        backend.refreshInstalled()
+    }
 
     ColumnLayout {
         width: reposPage.width
@@ -20,7 +23,7 @@ Kirigami.ScrollablePage {
         }
 
         Label {
-            text: qsTr("These are the repositories Qute Store uses to search for and install applications.")
+            text: qsTr("These are the repositories Katalog uses to search for and install applications.")
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
             opacity: 0.7
@@ -61,6 +64,25 @@ Kirigami.ScrollablePage {
                             Label {
                                 text: model.disabled ? qsTr("Disabled") : qsTr("Enabled")
                                 opacity: model.disabled ? 0.5 : 0.9
+                                font.pointSize: Kirigami.Theme.smallFont.pointSize
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.alignment: Qt.AlignVCenter
+                            Layout.rightMargin: Kirigami.Units.largeSpacing
+                            spacing: 0
+
+                            Label {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: model.installedApps
+                                font.bold: true
+                                font.pointSize: Kirigami.Theme.defaultFont.pointSize * 1.6
+                            }
+                            Label {
+                                Layout.alignment: Qt.AlignHCenter
+                                text: model.installedApps === 1 ? qsTr("app installed") : qsTr("apps installed")
+                                opacity: 0.7
                                 font.pointSize: Kirigami.Theme.smallFont.pointSize
                             }
                         }

@@ -8,6 +8,10 @@
 #include <KIconTheme>
 #endif
 
+#ifdef HAVE_WEBENGINE
+#include <QtWebEngineQuick/qtwebenginequickglobal.h>
+#endif
+
 #include "backend.h"
 
 int main(int argc, char *argv[])
@@ -15,11 +19,14 @@ int main(int argc, char *argv[])
 #ifdef HAVE_KICONTHEMES
     KIconTheme::initTheme();
 #endif
+#ifdef HAVE_WEBENGINE
+    QtWebEngineQuick::initialize();
+#endif
 
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("QuteStore"));
     app.setOrganizationName(QStringLiteral("io.github.zachvlat"));
-    app.setApplicationDisplayName(QStringLiteral("Qute Store"));
+    app.setApplicationDisplayName(QStringLiteral("Katalog"));
     app.setDesktopFileName(QStringLiteral("io.github.zachvlat.qutestore"));
     app.setWindowIcon(QIcon::fromTheme(QStringLiteral("io.github.zachvlat.qutestore")));
 

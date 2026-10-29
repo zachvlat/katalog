@@ -60,9 +60,14 @@ fi
 RUNTIME="$(sed -n 's/.*"runtime": "\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)"
 RUNTIME_VERSION="$(sed -n 's/.*"runtime-version": "\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)"
 SDK="$(sed -n 's/.*"sdk": "\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)"
+BASE="$(sed -n 's/.*"base": "\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)"
+BASE_VERSION="$(sed -n 's/.*"base-version": "\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)"
 missing=()
 flatpak info "$SDK//$RUNTIME_VERSION" >/dev/null 2>&1 || missing+=("$SDK//$RUNTIME_VERSION")
 flatpak info "$RUNTIME//$RUNTIME_VERSION" >/dev/null 2>&1 || missing+=("$RUNTIME//$RUNTIME_VERSION")
+if [[ -n "$BASE" ]]; then
+  flatpak info "$BASE//$BASE_VERSION" >/dev/null 2>&1 || missing+=("$BASE//$BASE_VERSION")
+fi
 if [[ ${#missing[@]} -gt 0 ]]; then
   echo "Missing Flatpak runtime/SDK: ${missing[*]}" >&2
   echo "Install it, e.g.: flatpak install --user -y flathub ${missing[*]}" >&2

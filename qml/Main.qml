@@ -8,7 +8,7 @@ Kirigami.ApplicationWindow {
     id: window
     width: 1280
     height: 800
-    title: qsTr("Qute Store")
+    title: qsTr("Katalog")
 
     readonly property real tilePadding: Kirigami.Units.largeSpacing * 2
     readonly property real tileHeight: Kirigami.Units.iconSizes.huge + tilePadding * 2
@@ -17,6 +17,7 @@ Kirigami.ApplicationWindow {
 
     Component.onCompleted: {
         backend.loadExplore()
+        backend.refreshInstalled()
 
         if (pageStack.columnView)
             pageStack.columnView.columnResizeMode = KL.ColumnView.SingleColumn
@@ -97,6 +98,7 @@ Kirigami.ApplicationWindow {
     component SidebarRow: ItemDelegate {
         id: control
         property string iconName
+        property int badge: 0
 
         Layout.fillWidth: true
 
@@ -117,7 +119,8 @@ Kirigami.ApplicationWindow {
                 id: label
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignVCenter
-                text: control.text
+                textFormat: control.badge > 0 ? Text.RichText : Text.PlainText
+                text: control.badge > 0 ? control.text + "<sup><b>&nbsp;" + control.badge + "</b></sup>" : control.text
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
                 color: control.highlighted ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
@@ -129,7 +132,7 @@ Kirigami.ApplicationWindow {
         id: sidebar
         modal: false
         width: Kirigami.Units.gridUnit * 14
-        title: qsTr("Qute Store")
+        title: qsTr("Katalog")
 
         topContent: [
             SidebarRow {
@@ -150,6 +153,7 @@ Kirigami.ApplicationWindow {
             SidebarRow {
                 text: qsTr("Updates")
                 iconName: "system-software-update"
+                badge: backend.updates.count
                 onClicked: window.navigateTo(updatesPage)
             },
             SidebarRow {
@@ -197,6 +201,12 @@ Kirigami.ApplicationWindow {
                 text: qsTr("KDE apps")
                 iconName: "kde-symbolic"
                 onClicked: window.openCategory(qsTr("KDE apps"), "kde")
+            },
+            SidebarRow {
+                text: qsTr("Bookmarks")
+                iconName: "bookmarks"
+                visible: backend.flathubAccount.connected
+                onClicked: window.navigateTo(bookmarksPage)
             }
         ]
     }
@@ -410,6 +420,74 @@ Kirigami.ApplicationWindow {
     Component {
         id: installedPage
         InstalledPage {}
+    }
+
+    Component {
+        id: bookmarksPage
+        Kirigami.Page {
+            title: qsTr("Bookmarks")
+            Component.onCompleted: backend.loadBookmarks()
+
+            actions: [
+                Kirigami.Action {
+                    text: backend.bookmarksToInstall > 0
+                          ? qsTr("Install All (%1)").arg(backend.bookmarksToInstall)
+                          : qsTr("Install All")
+                    icon.name: "download"
+                    enabled: backend.bookmarksToInstall > 0
+                             && (!backend.currentTransaction || !backend.currentTransaction.running)
+                    onTriggered: backend.installAllBookmarks()
+                },
+                Kirigami.Action {
+                    text: qsTr("Refresh")
+                    icon.name: "view-refresh"
+                    enabled: !backend.bookmarksLoading
+                    onTriggered: backend.loadBookmarks()
+                }
+            ]
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: Kirigami.Units.smallSpacing
+
+                Kirigami.InlineMessage {
+                    Layout.fillWidth: true
+                    visible: backend.bookmarksError.length > 0
+                    type: Kirigami.MessageType.Error
+                    text: backend.bookmarksError
+                }
+
+                BusyIndicator {
+                    Layout.alignment: Qt.AlignHCenter
+                    running: backend.bookmarksLoading
+                    visible: running
+                }
+
+                GridView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    visible: !backend.bookmarksLoading
+                    clip: true
+                    cellWidth: Kirigami.Units.gridUnit * 13
+                    cellHeight: window.tileHeight + Kirigami.Units.gridUnit
+                    model: backend.bookmarks
+                    delegate: exploreTile
+
+                    Kirigami.PlaceholderMessage {
+                        anchors.centerIn: parent
+                        width: parent.width - Kirigami.Units.gridUnit * 4
+                        visible: backend.bookmarks.count === 0 && backend.bookmarksError.length === 0
+                        icon.name: "bookmarks"
+                        text: backend.flathubAccount.connected
+                              ? qsTr("No bookmarks yet")
+                              : qsTr("Not connected to Flathub")
+                        explanation: backend.flathubAccount.connected
+                                     ? qsTr("Bookmark apps on flathub.org and they will show up here.")
+                                     : qsTr("Connect your Flathub account in Settings to see your bookmarks.")
+                    }
+                }
+            }
+        }
     }
 
     Component {

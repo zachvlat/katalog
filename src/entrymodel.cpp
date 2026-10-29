@@ -82,3 +82,17 @@ void EntryModel::setVerifiedIds(const QSet<QString> &ids)
     for (int row : changed)
         Q_EMIT dataChanged(index(row, 0), index(row, 0), {VerifiedRole});
 }
+
+void EntryModel::setInstalledIds(const QSet<QString> &ids)
+{
+    QList<int> changed;
+    for (int row = 0; row < m_entries.size(); ++row) {
+        const bool installed = ids.contains(m_entries.at(row).appId);
+        if (m_entries[row].installed != installed) {
+            m_entries[row].installed = installed;
+            changed.append(row);
+        }
+    }
+    for (int row : changed)
+        Q_EMIT dataChanged(index(row, 0), index(row, 0), {InstalledRole});
+}

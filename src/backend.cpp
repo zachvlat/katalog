@@ -1038,6 +1038,48 @@ LeftoverScan scanLeftovers(FlatpakManager *manager)
     return scan;
 }
 
+QList<EntryData> loadBookmarkEntries(FlatpakManager *manager, const QStringList &appIds)
+{
+    QList<EntryData> entries;
+    QSet<QString> installed;
+    installedAppIds(manager, &installed);
+
+#ifdef HAVE_APPSTREAM
+    AsPool *pool = as_pool_new();
+    configureAppStreamPool(pool, manager);
+    GError *error = nullptr;
+    if (!as_pool_load(pool, nullptr, &error)) {
+        qWarning() << "AppStream: failed to load pool:" << (error ? error->message : "unknown error");
+        g_clear_error(&error);
+        g_object_unref(pool);
+        pool = nullptr;
+    }
+#endif
+
+    for (const QString &appId : appIds) {
+        EntryData entry;
+#ifdef HAVE_APPSTREAM
+        if (pool) {
+            if (AsComponentBox *box = findComponent(pool, appId)) {
+                entry = entryFromComponent(as_component_box_index(box, 0));
+                g_object_unref(box);
+            }
+        }
+#endif
+        entry.appId = appId;
+        if (entry.name.isEmpty())
+            entry.name = appId;
+        entry.installed = installed.contains(appId);
+        entries.append(entry);
+    }
+
+#ifdef HAVE_APPSTREAM
+    if (pool)
+        g_object_unref(pool);
+#endif
+    return entries;
+}
+
 AppDetailData loadDetails(FlatpakManager *manager, const QString &appId, const QString &ref, bool userInstallation,
                           quint64 generation)
 {
@@ -1077,6 +1119,8 @@ Backend::Backend(QObject *parent)
     m_leftovers = new LeftoverModel(this);
     m_flathub = new FlathubClient(this);
     m_nam = new QNetworkAccessManager(this);
+    m_account = new FlathubAccount(this);
+    m_bookmarks = new EntryModel(this);
     setUpColorSchemes();
 
     m_watcher = new QFutureWatcher<QList<EntryData>>(this);
@@ -1151,6 +1195,32 @@ Backend::Backend(QObject *parent)
         m_leftoverError = scan.error;
         m_scanningLeftovers = false;
         Q_EMIT leftoversChanged();
+    });
+
+    m_bookmarksWatcher = new QFutureWatcher<QList<EntryData>>(this);
+    connect(m_bookmarksWatcher, &QFutureWatcher<QList<EntryData>>::finished, this, [this]() {
+        if (!m_bookmarksLoading)
+            return;
+        QList<EntryData> entries = m_bookmarksWatcher->result();
+        const QSet<QString> verified = m_flathub->verifiedAppIds();
+        for (EntryData &entry : entries)
+            entry.verified = verified.contains(entry.appId);
+        m_bookmarks->setEntries(entries);
+        m_bookmarksLoading = false;
+        Q_EMIT bookmarksChanged();
+    });
+
+    connect(m_account, &FlathubAccount::stateChanged, this, &Backend::onAccountStateChanged);
+    connect(m_account, &FlathubAccount::favoritesReady, this, [this](const QStringList &appIds) {
+        if (!m_bookmarksLoading)
+            return;
+        m_bookmarksWatcher->setFuture(
+            QtConcurrent::run([this, appIds]() { return loadBookmarkEntries(m_flatpak, appIds); }));
+    });
+    connect(m_account, &FlathubAccount::favoritesFailed, this, [this](const QString &message) {
+        m_bookmarksLoading = false;
+        m_bookmarksError = message;
+        Q_EMIT bookmarksChanged();
     });
 
     m_updateTimer = new QTimer(this);
@@ -1286,6 +1356,10 @@ InstalledLists loadInstalledLists(FlatpakManager *manager)
                     continue;
                 seen.insert(prefix + entry.ref);
                 lists.installed.append(entry);
+                if (kind == FLATPAK_REF_KIND_APP && FLATPAK_IS_INSTALLED_REF(ref)) {
+                    if (const char *origin = flatpak_installed_ref_get_origin(FLATPAK_INSTALLED_REF(ref)))
+                        ++lists.appsPerRemote[prefix + QString::fromUtf8(origin)];
+                }
             }
         }
 
@@ -1354,8 +1428,15 @@ void Backend::applyInstalledLists(const InstalledLists &lists)
     m_updates->setEntries(updates);
     m_updatesApps->setEntries(updatesApps);
     m_updatesRuntimes->setEntries(updatesRuntimes);
+    m_remotes->setInstalledCounts(lists.appsPerRemote);
     m_loadingInstalled = false;
     Q_EMIT installedChanged();
+
+    QSet<QString> installedIds;
+    for (const EntryData &entry : installedApps)
+        installedIds.insert(entry.appId);
+    m_bookmarks->setInstalledIds(installedIds);
+    Q_EMIT bookmarksChanged();
 
     if (m_notifyAfterRefresh) {
         m_notifyAfterRefresh = false;
@@ -1485,6 +1566,7 @@ void Backend::applyVerifiedApps()
     m_updatesApps->setVerifiedIds(ids);
     m_updatesRuntimes->setVerifiedIds(ids);
     m_category->setVerifiedIds(ids);
+    m_bookmarks->setVerifiedIds(ids);
     for (EntryModel *model : m_exploreModels)
         model->setVerifiedIds(ids);
 
@@ -1527,13 +1609,13 @@ void Backend::openApp(const QString &appId, const QString &ref, bool userInstall
 
 void Backend::installApp(const QString &appId)
 {
-    m_updateQueue.clear();
+    m_queue.clear();
     startTransaction(Transaction::Install, appId);
 }
 
 void Backend::updateApp(const QString &appId, const QString &ref, bool userInstallation)
 {
-    m_updateQueue.clear();
+    m_queue.clear();
     startTransaction(Transaction::Update, appId, false, ref, userInstallation);
 }
 
@@ -1542,17 +1624,16 @@ void Backend::updateAll()
     if (m_transaction && m_transaction->running())
         return;
 
-    const QList<EntryData> pending = m_updates->entries();
-    if (pending.isEmpty())
-        return;
-
-    m_updateQueue = pending;
-    startNextQueuedUpdate();
+    m_queue.clear();
+    for (const EntryData &entry : m_updates->entries())
+        m_queue.append({Transaction::Update, entry});
+    m_queueContinuesOnError = false;
+    startNextQueued();
 }
 
 void Backend::removeApp(const QString &appId, bool deleteData, const QString &ref, bool userInstallation)
 {
-    m_updateQueue.clear();
+    m_queue.clear();
     startTransaction(Transaction::Remove, appId, deleteData, ref, userInstallation);
 }
 
@@ -1608,23 +1689,69 @@ void Backend::startTransaction(int kind, const QString &appId, bool deleteData, 
     });
 
     connect(transaction, &Transaction::finishedChanged, this, [this, transaction]() {
-        if (m_updateQueue.isEmpty())
+        if (m_queue.isEmpty())
             return;
-        if (transaction->success())
-            startNextQueuedUpdate();
+        if (transaction->success() || m_queueContinuesOnError)
+            startNextQueued();
         else
-            m_updateQueue.clear();
+            m_queue.clear();
     });
 
     transaction->start();
 }
 
-void Backend::startNextQueuedUpdate()
+void Backend::startNextQueued()
 {
-    if (m_updateQueue.isEmpty() || (m_transaction && m_transaction->running()))
+    if (m_queue.isEmpty() || (m_transaction && m_transaction->running()))
         return;
-    const EntryData next = m_updateQueue.takeFirst();
-    startTransaction(Transaction::Update, next.appId, false, next.ref, next.userInstallation);
+    const QueuedTransaction next = m_queue.takeFirst();
+    startTransaction(next.kind, next.entry.appId, false, next.entry.ref, next.entry.userInstallation);
+}
+
+void Backend::onAccountStateChanged()
+{
+    if (m_account->checking())
+        return;
+    if (m_account->connected()) {
+        if (m_bookmarks->rowCount() == 0)
+            loadBookmarks();
+        return;
+    }
+    m_bookmarks->clear();
+    m_bookmarksLoading = false;
+    m_bookmarksError.clear();
+    Q_EMIT bookmarksChanged();
+}
+
+void Backend::loadBookmarks()
+{
+    if (m_bookmarksLoading || !m_account->connected())
+        return;
+    m_bookmarksLoading = true;
+    m_bookmarksError.clear();
+    Q_EMIT bookmarksChanged();
+    m_account->fetchFavorites();
+}
+
+int Backend::bookmarksToInstall() const
+{
+    const QList<EntryData> &entries = m_bookmarks->entries();
+    return static_cast<int>(std::count_if(entries.begin(), entries.end(),
+                                          [](const EntryData &entry) { return !entry.installed; }));
+}
+
+void Backend::installAllBookmarks()
+{
+    if (m_transaction && m_transaction->running())
+        return;
+
+    m_queue.clear();
+    for (const EntryData &entry : m_bookmarks->entries()) {
+        if (!entry.installed)
+            m_queue.append({Transaction::Install, entry});
+    }
+    m_queueContinuesOnError = true;
+    startNextQueued();
 }
 
 void Backend::refreshRemotes()
@@ -1920,7 +2047,8 @@ namespace {
 
 const QRegularExpression &offeredSchemeIds()
 {
-    static const QRegularExpression ids(QStringLiteral("^(|BreezeDark|BreezeLight)$"));
+    static const QRegularExpression ids(QStringLiteral(
+        "^(|BreezeDark|BreezeLight|KatalogNord|KatalogGruvbox|KatalogSweetMars|KatalogCatppuccinMocha)$"));
     return ids;
 }
 

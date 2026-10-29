@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=Qute Store
+Name=Katalog
 Comment=Flatpak store for KDE Plasma
 Exec=qutestore
 Icon=io.github.zachvlat.qutestore

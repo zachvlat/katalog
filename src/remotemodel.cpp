@@ -1,5 +1,14 @@
 #include "remotemodel.h"
 
+namespace {
+
+QString remoteKey(bool isUser, const QString &name)
+{
+    return (isUser ? QStringLiteral("user:") : QStringLiteral("system:")) + name;
+}
+
+}
+
 RemoteModel::RemoteModel(QObject *parent)
     : QAbstractListModel(parent)
 {
@@ -25,6 +34,7 @@ QVariant RemoteModel::data(const QModelIndex &index, int role) const
     case DisabledRole: return remote.disabled;
     case IsUserRole: return remote.isUser;
     case ScopeRole: return remote.isUser ? QStringLiteral("user") : QStringLiteral("system");
+    case InstalledAppsRole: return m_appsPerRemote.value(remoteKey(remote.isUser, remote.name));
     }
     return QVariant();
 }
@@ -38,6 +48,7 @@ QHash<int, QByteArray> RemoteModel::roleNames() const
         {DisabledRole, "disabled"},
         {IsUserRole, "isUser"},
         {ScopeRole, "scope"},
+        {InstalledAppsRole, "installedApps"},
     };
 }
 
@@ -46,4 +57,14 @@ void RemoteModel::setRemotes(const QList<RemoteData> &remotes)
     beginResetModel();
     m_remotes = remotes;
     endResetModel();
+}
+
+// Keys are "user:<remote>" or "system:<remote>".
+void RemoteModel::setInstalledCounts(const QHash<QString, int> &appsPerRemote)
+{
+    if (m_appsPerRemote == appsPerRemote)
+        return;
+    m_appsPerRemote = appsPerRemote;
+    if (!m_remotes.isEmpty())
+        Q_EMIT dataChanged(index(0, 0), index(m_remotes.size() - 1, 0), {InstalledAppsRole});
 }

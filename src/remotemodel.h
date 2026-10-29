@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractListModel>
+#include <QHash>
 #include <QList>
 #include <QString>
 
@@ -28,6 +29,7 @@ public:
         DisabledRole,
         IsUserRole,
         ScopeRole,
+        InstalledAppsRole,
     };
 
     explicit RemoteModel(QObject *parent = nullptr);
@@ -37,7 +39,9 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     void setRemotes(const QList<RemoteData> &remotes);
+    void setInstalledCounts(const QHash<QString, int> &appsPerRemote);
 
 private:
     QList<RemoteData> m_remotes;
+    QHash<QString, int> m_appsPerRemote;
 };

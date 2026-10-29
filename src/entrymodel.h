@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractListModel>
+#include <QHash>
 #include <QList>
 #include <QSet>
 #include <QString>
@@ -33,6 +34,7 @@ struct ExploreResult {
 struct InstalledLists {
     QList<EntryData> installed;
     QList<EntryData> updates;
+    QHash<QString, int> appsPerRemote;
 };
 
 class EntryModel : public QAbstractListModel {
@@ -53,6 +55,7 @@ public:
     void setEntries(const QList<EntryData> &entries);
 
     void setVerifiedIds(const QSet<QString> &ids);
+    void setInstalledIds(const QSet<QString> &ids);
 
     const QList<EntryData> &entries() const { return m_entries; }
 

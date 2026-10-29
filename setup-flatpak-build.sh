@@ -139,9 +139,15 @@ RUNTIME="$(json_value runtime)"
 SDK="$(json_value sdk)"
 VERSION="$(json_value runtime-version)"
 [ -n "$RUNTIME" ] && [ -n "$SDK" ] && [ -n "$VERSION" ] || die "could not read runtime/sdk from $MANIFEST"
+BASE="$(json_value base)"
+BASE_VERSION="$(json_value base-version)"
 
 say "Installing $RUNTIME//$VERSION and $SDK//$VERSION (about 1-2 GB the first time)"
 flatpak install --user -y --noninteractive flathub "$RUNTIME//$VERSION" "$SDK//$VERSION"
+if [ -n "$BASE" ]; then
+  say "Installing $BASE//$BASE_VERSION"
+  flatpak install --user -y --noninteractive flathub "$BASE//$BASE_VERSION"
+fi
 
 BUILD_ARGS=""
 if [ "$USE_BUILDER_APP" = true ]; then

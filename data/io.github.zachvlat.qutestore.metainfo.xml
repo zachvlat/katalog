@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
   <id>io.github.zachvlat.qutestore</id>
-  <name>Qute Store</name>
+  <name>Katalog</name>
   <summary>Native KDE/Qt Flatpak store</summary>
   <developer id="io.github.zachvlat">
     <name>Zacharias Vlatakis</name>

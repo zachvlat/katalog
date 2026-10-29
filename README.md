@@ -1,4 +1,4 @@
-# ![alt text](data/icons/src/64px.svg) Qute Store
+# ![alt text](data/icons/src/64px.svg) Katalog
 
 A native **KDE/Qt (Kirigami) port of a Flatpak store**, borrowing its
 design and per-feature behavior from [Bazaar](https://github.com/kolunmi/bazaar).
