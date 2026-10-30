@@ -1166,16 +1166,22 @@ Backend::Backend(QObject *parent)
 
     m_categoryWatcher = new QFutureWatcher<QList<EntryData>>(this);
     connect(m_categoryWatcher, &QFutureWatcher<QList<EntryData>>::finished, this, [this]() {
-        const quint64 generation = m_categoryGeneration;
-        const QList<EntryData> results = m_categoryWatcher->result();
-        if (generation != m_categoryGeneration)
+        const QString key = m_categoryPendingKey;
+        if (key.isEmpty() || key != m_categoryKey)
             return;
+        const QList<EntryData> results = m_categoryWatcher->result();
         const QSet<QString> verified = m_flathub->verifiedAppIds();
+        QList<EntryData> rows;
+        rows.reserve(results.size());
         for (const EntryData &entry : results) {
             EntryData row = entry;
-            row.verified = verified.contains(row.appId);
-            m_category->append(row);
+            row.verified = row.verified || verified.contains(row.appId);
+            rows.append(row);
         }
+        if (!rows.isEmpty())
+            m_categoryCache.insert(key, rows);
+        m_category->setEntries(rows);
+        m_categoryPendingKey.clear();
         m_categoryLoading = false;
         Q_EMIT categoryChanged();
     });
@@ -1194,6 +1200,7 @@ Backend::Backend(QObject *parent)
         m_leftovers->setLeftovers(scan.items);
         m_leftoverError = scan.error;
         m_scanningLeftovers = false;
+        m_leftoversLoaded = true;
         Q_EMIT leftoversChanged();
     });
 
@@ -1207,6 +1214,7 @@ Backend::Backend(QObject *parent)
             entry.verified = verified.contains(entry.appId);
         m_bookmarks->setEntries(entries);
         m_bookmarksLoading = false;
+        m_bookmarksLoaded = true;
         Q_EMIT bookmarksChanged();
     });
 
@@ -1402,6 +1410,13 @@ void Backend::refreshInstalled()
     m_installedWatcher->setFuture(QtConcurrent::run([this]() { return loadInstalledLists(m_flatpak); }));
 }
 
+void Backend::ensureInstalled()
+{
+    if (m_installedLoaded || m_loadingInstalled)
+        return;
+    refreshInstalled();
+}
+
 void Backend::applyInstalledLists(const InstalledLists &lists)
 {
     const QSet<QString> verified = m_flathub->verifiedAppIds();
@@ -1430,6 +1445,7 @@ void Backend::applyInstalledLists(const InstalledLists &lists)
     m_updatesRuntimes->setEntries(updatesRuntimes);
     m_remotes->setInstalledCounts(lists.appsPerRemote);
     m_loadingInstalled = false;
+    m_installedLoaded = true;
     Q_EMIT installedChanged();
 
     QSet<QString> installedIds;
@@ -1460,6 +1476,7 @@ void Backend::loadExplore()
     if (m_exploring)
         return;
 
+    m_exploreLoaded = false;
     m_exploring = true;
     m_exploreCurated.clear();
     m_exploreSections.clear();
@@ -1474,6 +1491,13 @@ void Backend::loadExplore()
     m_explorePending = 2;
     m_exploreWatcher->setFuture(QtConcurrent::run([this]() { return loadExploreData(m_flatpak); }));
     m_flathub->fetchExplore();
+}
+
+void Backend::ensureExplore()
+{
+    if (m_exploreLoaded || m_exploring)
+        return;
+    loadExplore();
 }
 
 void Backend::explorePartDone()
@@ -1553,6 +1577,7 @@ void Backend::buildExplore()
     }
 
     m_exploring = false;
+    m_exploreLoaded = !m_exploreCurated.isEmpty() || !m_exploreSections.isEmpty();
     Q_EMIT exploreChanged();
 }
 
@@ -1578,9 +1603,21 @@ void Backend::applyVerifiedApps()
 
 void Backend::loadCategory(const QString &category)
 {
+    const auto cached = m_categoryCache.constFind(category);
+    if (cached != m_categoryCache.constEnd()) {
+        m_categoryPendingKey.clear();
+        m_categoryKey = category;
+        m_category->setEntries(cached.value());
+        m_category->setVerifiedIds(m_flathub->verifiedAppIds());
+        m_categoryLoading = false;
+        Q_EMIT categoryChanged();
+        return;
+    }
+
+    m_categoryKey = category;
+    m_categoryPendingKey = category;
     m_category->clear();
     m_categoryLoading = true;
-    const quint64 generation = ++m_categoryGeneration;
     Q_EMIT categoryChanged();
 
 #ifdef HAVE_APPSTREAM
@@ -1588,14 +1625,22 @@ void Backend::loadCategory(const QString &category)
         m_categoryWatcher->setFuture(QtConcurrent::run([this]() { return appStreamKdeApps(m_flatpak); }));
     } else {
         m_categoryWatcher->setFuture(
-            QtConcurrent::run([this, category, generation]() { return appStreamCategory(m_flatpak, category); }));
+            QtConcurrent::run([this, category]() { return appStreamCategory(m_flatpak, category); }));
     }
 #else
     Q_UNUSED(category)
-    Q_UNUSED(generation)
     m_categoryLoading = false;
+    m_categoryPendingKey.clear();
     Q_EMIT categoryChanged();
 #endif
+}
+
+void Backend::ensureCategory(const QString &category)
+{
+    if (m_categoryKey == category
+        && (m_categoryCache.contains(category) || m_categoryPendingKey == category))
+        return;
+    loadCategory(category);
 }
 
 void Backend::openApp(const QString &appId, const QString &ref, bool userInstallation)
@@ -1678,6 +1723,7 @@ void Backend::startTransaction(int kind, const QString &appId, bool deleteData, 
 
     connect(transaction, &Transaction::completed, this, &Backend::refreshInstalled);
     connect(transaction, &Transaction::completed, this, [this, appId, deleteData]() {
+        m_leftoversLoaded = false;
         if (deleteData)
             removeAppDataIfUninstalled(m_flatpak, appId);
         if (m_details && m_details->appId() == appId)
@@ -1714,11 +1760,12 @@ void Backend::onAccountStateChanged()
         return;
     if (m_account->connected()) {
         if (m_bookmarks->rowCount() == 0)
-            loadBookmarks();
+            ensureBookmarks();
         return;
     }
     m_bookmarks->clear();
     m_bookmarksLoading = false;
+    m_bookmarksLoaded = false;
     m_bookmarksError.clear();
     Q_EMIT bookmarksChanged();
 }
@@ -1728,9 +1775,17 @@ void Backend::loadBookmarks()
     if (m_bookmarksLoading || !m_account->connected())
         return;
     m_bookmarksLoading = true;
+    m_bookmarksLoaded = false;
     m_bookmarksError.clear();
     Q_EMIT bookmarksChanged();
     m_account->fetchFavorites();
+}
+
+void Backend::ensureBookmarks()
+{
+    if (m_bookmarksLoaded || m_bookmarksLoading || !m_account->connected())
+        return;
+    loadBookmarks();
 }
 
 int Backend::bookmarksToInstall() const
@@ -1790,6 +1845,14 @@ void Backend::refreshRemotes()
     }
 #endif
     m_remotes->setRemotes(remotes);
+    m_remotesLoaded = true;
+}
+
+void Backend::ensureRemotes()
+{
+    if (m_remotesLoaded)
+        return;
+    refreshRemotes();
 }
 
 #ifdef HAVE_FLATPAK
@@ -2004,6 +2067,13 @@ void Backend::refreshLeftovers()
     m_scanningLeftovers = true;
     Q_EMIT leftoversChanged();
     m_leftoverWatcher->setFuture(QtConcurrent::run([this]() { return scanLeftovers(m_flatpak); }));
+}
+
+void Backend::ensureLeftovers()
+{
+    if (m_leftoversLoaded || m_scanningLeftovers)
+        return;
+    refreshLeftovers();
 }
 
 void Backend::removeLeftover(const QString &path)

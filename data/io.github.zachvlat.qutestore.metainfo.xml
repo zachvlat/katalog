@@ -32,6 +32,13 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="1.0.4" date="2026-10-30">
+      <description>
+        <p>Sign in to Flathub to see your bookmarks, with the login now kept
+        across restarts. Add color themes, keep pages and categories loaded
+        when switching between them, and show the update count in a badge.</p>
+      </description>
+    </release>
     <release version="1.0.3" date="2026-10-24">
       <description>
         <p>Include runtime updates in the Updates list and allow updating or

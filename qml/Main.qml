@@ -16,8 +16,8 @@ Kirigami.ApplicationWindow {
     readonly property var tx: backend.currentTransaction
 
     Component.onCompleted: {
-        backend.loadExplore()
-        backend.refreshInstalled()
+        backend.ensureExplore()
+        backend.ensureInstalled()
 
         if (pageStack.columnView)
             pageStack.columnView.columnResizeMode = KL.ColumnView.SingleColumn
@@ -41,7 +41,7 @@ Kirigami.ApplicationWindow {
     }
 
     function openCategory(title, categoryId) {
-        backend.loadCategory(categoryId)
+        backend.ensureCategory(categoryId)
         while (pageStack.depth > 1)
             pageStack.pop()
         pageStack.replace(categoryPageComponent, { "title": title, "categoryTitle": title })
@@ -119,11 +119,29 @@ Kirigami.ApplicationWindow {
                 id: label
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignVCenter
-                textFormat: control.badge > 0 ? Text.RichText : Text.PlainText
-                text: control.badge > 0 ? control.text + "<sup><b>&nbsp;" + control.badge + "</b></sup>" : control.text
+                text: control.text
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
                 color: control.highlighted ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.textColor
+            }
+
+            Rectangle {
+                id: badgeCircle
+                visible: control.badge > 0
+                Layout.alignment: Qt.AlignVCenter
+                implicitHeight: Kirigami.Units.gridUnit
+                implicitWidth: Math.max(implicitHeight, badgeLabel.implicitWidth + Kirigami.Units.smallSpacing)
+                radius: height / 2
+                color: control.highlighted ? Kirigami.Theme.highlightedTextColor : Kirigami.Theme.highlightColor
+
+                Label {
+                    id: badgeLabel
+                    anchors.centerIn: parent
+                    text: control.badge > 99 ? qsTr("99+") : control.badge
+                    color: control.highlighted ? Kirigami.Theme.highlightColor : Kirigami.Theme.highlightedTextColor
+                    font.bold: true
+                    font.pointSize: Kirigami.Theme.smallFont.pointSize
+                }
             }
         }
     }
@@ -297,7 +315,7 @@ Kirigami.ApplicationWindow {
             id: exploreRoot
             title: qsTr("Explore")
 
-            Component.onCompleted: backend.loadExplore()
+            Component.onCompleted: backend.ensureExplore()
 
             Column {
                 width: exploreRoot.width
@@ -426,7 +444,7 @@ Kirigami.ApplicationWindow {
         id: bookmarksPage
         Kirigami.Page {
             title: qsTr("Bookmarks")
-            Component.onCompleted: backend.loadBookmarks()
+            Component.onCompleted: backend.ensureBookmarks()
 
             actions: [
                 Kirigami.Action {
@@ -495,7 +513,7 @@ Kirigami.ApplicationWindow {
         Kirigami.ScrollablePage {
             id: updatesRoot
             title: qsTr("Updates")
-            Component.onCompleted: backend.refreshInstalled()
+            Component.onCompleted: backend.ensureInstalled()
 
             actions: [
                 Kirigami.Action {
@@ -505,6 +523,12 @@ Kirigami.ApplicationWindow {
                              && (!backend.currentTransaction
                                  || !backend.currentTransaction.running)
                     onTriggered: backend.updateAll()
+                },
+                Kirigami.Action {
+                    text: qsTr("Refresh")
+                    icon.name: "view-refresh"
+                    enabled: !backend.loadingInstalled
+                    onTriggered: backend.refreshInstalled()
                 }
             ]
 

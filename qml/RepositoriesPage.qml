@@ -8,8 +8,8 @@ Kirigami.ScrollablePage {
     title: qsTr("Repositories")
 
     Component.onCompleted: {
-        backend.refreshRemotes()
-        backend.refreshInstalled()
+        backend.ensureRemotes()
+        backend.ensureInstalled()
     }
 
     ColumnLayout {

@@ -7,7 +7,7 @@ Kirigami.ScrollablePage {
     id: leftoverPage
     title: qsTr("Leftover files")
 
-    Component.onCompleted: backend.refreshLeftovers()
+    Component.onCompleted: backend.ensureLeftovers()
 
     ColumnLayout {
         width: leftoverPage.width

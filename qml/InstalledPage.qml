@@ -5,7 +5,7 @@ import org.kde.kirigami as Kirigami
 
 Kirigami.ScrollablePage {
     title: qsTr("Installed")
-    Component.onCompleted: backend.refreshInstalled()
+    Component.onCompleted: backend.ensureInstalled()
 
     ColumnLayout {
         width: parent.width

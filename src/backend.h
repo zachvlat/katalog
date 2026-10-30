@@ -90,8 +90,11 @@ public:
 
     Q_INVOKABLE void search(const QString &query);
     Q_INVOKABLE void refreshInstalled();
+    Q_INVOKABLE void ensureInstalled();
     Q_INVOKABLE void loadExplore();
+    Q_INVOKABLE void ensureExplore();
     Q_INVOKABLE void loadCategory(const QString &category);
+    Q_INVOKABLE void ensureCategory(const QString &category);
     Q_INVOKABLE void openApp(const QString &appId, const QString &ref = QString(), bool userInstallation = false);
     Q_INVOKABLE void installApp(const QString &appId);
     Q_INVOKABLE void updateApp(const QString &appId, const QString &ref = QString(), bool userInstallation = false);
@@ -102,16 +105,19 @@ public:
     Q_INVOKABLE void dismissTransaction();
 
     Q_INVOKABLE void refreshRemotes();
+    Q_INVOKABLE void ensureRemotes();
     Q_INVOKABLE void addRemote(const QString &name, const QString &url, bool user);
     Q_INVOKABLE void removeRemote(const QString &name, bool user);
     Q_INVOKABLE void setRemoteEnabled(const QString &name, bool user, bool enabled);
 
     Q_INVOKABLE void refreshLeftovers();
+    Q_INVOKABLE void ensureLeftovers();
     Q_INVOKABLE void removeLeftover(const QString &path);
 
     Q_INVOKABLE void checkForUpdates();
 
     Q_INVOKABLE void loadBookmarks();
+    Q_INVOKABLE void ensureBookmarks();
     Q_INVOKABLE void installAllBookmarks();
 
 Q_SIGNALS:
@@ -156,6 +162,7 @@ private:
     FlathubAccount *m_account = nullptr;
     EntryModel *m_bookmarks = nullptr;
     bool m_bookmarksLoading = false;
+    bool m_bookmarksLoaded = false;
     QString m_bookmarksError;
 
     QVariantList m_exploreCurated;
@@ -166,7 +173,11 @@ private:
     QList<EntryData> m_recentUpdated;
     int m_explorePending = 0;
     bool m_exploring = false;
+    bool m_exploreLoaded = false;
     bool m_categoryLoading = false;
+    QString m_categoryKey;
+    QString m_categoryPendingKey;
+    QHash<QString, QList<EntryData>> m_categoryCache;
 
     QTimer *m_updateTimer = nullptr;
     struct QueuedTransaction {
@@ -177,10 +188,12 @@ private:
     bool m_queueContinuesOnError = false;
     int m_lastNotifiedUpdates = -1;
     bool m_loadingInstalled = false;
+    bool m_installedLoaded = false;
     bool m_installedRefreshQueued = false;
     bool m_notifyAfterRefresh = false;
 
     bool m_scanningLeftovers = false;
+    bool m_leftoversLoaded = false;
     QString m_leftoverError;
 
     QNetworkAccessManager *m_nam = nullptr;
@@ -188,6 +201,7 @@ private:
     QString m_remoteMessage;
     bool m_remoteBusy = false;
     bool m_remoteSucceeded = false;
+    bool m_remotesLoaded = false;
 
     QFutureWatcher<QList<EntryData>> *m_watcher = nullptr;
     QFutureWatcher<AppDetailData> *m_detailsWatcher = nullptr;
@@ -199,6 +213,5 @@ private:
     QFutureWatcher<QList<EntryData>> *m_bookmarksWatcher = nullptr;
     quint64 m_searchGeneration = 0;
     quint64 m_detailsGeneration = 0;
-    quint64 m_categoryGeneration = 0;
     bool m_searching = false;
 };
